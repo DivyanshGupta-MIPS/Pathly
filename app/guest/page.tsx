@@ -114,7 +114,7 @@ function GuestMapContent() {
     if (mapUrl) {
       const img = new window.Image();
       // THIS IS THE MAGIC LINE THAT FIXES THE BLANK MAP
-      img.crossOrigin = "Anonymous"; 
+      //img.crossOrigin = "Anonymous"; 
       img.src = mapUrl;
       img.onload = () => setBgImage(img);
       img.onerror = () => console.error("Canvas failed to load the image URL:", mapUrl);
