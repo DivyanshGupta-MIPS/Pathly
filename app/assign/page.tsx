@@ -88,7 +88,9 @@ function PassGenerator() {
   if (!venueId) return <div className="p-8 text-white bg-slate-900 min-h-screen">Invalid Venue ID. Please return to Editor.</div>;
   if (isLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-500" /></div>;
 
-  let previewUrl = targetId ? `${window.location.origin}/navigate?venueId=${venueId}&target=${targetId}` : window.location.origin;
+  let previewUrl = targetId 
+  ? `${window.location.origin}/guest?venueId=${venueId}&target=${targetId}` 
+  : `${window.location.origin}/guest?venueId=${venueId}`;
   if (targetId && startId) previewUrl += `&start=${startId}`;
   
   const targetLabel = destinations.find(d => d.id === targetId)?.label || "Select a destination";
