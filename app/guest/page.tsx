@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase"; // Adjust path if your firebase.ts is elsewhere
 import { doc, getDoc } from "firebase/firestore";
@@ -60,7 +60,7 @@ const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: st
   return path[0] === startId ? path : [];
 };
 
-export default function GuestMap() {
+function GuestMapContent() {
   const searchParams = useSearchParams();
   const venueId = searchParams.get("venueId");
   const guestName = searchParams.get("name") || "VIP Guest";
@@ -100,6 +100,7 @@ export default function GuestMap() {
     };
     fetchVenue();
   }, [venueId]);
+  
 
   const activePath = useMemo(() => {
     if (!venue || !startNode || !destNode) return [];
@@ -253,5 +254,18 @@ export default function GuestMap() {
         </div>
       )}
     </div>
+  );
+}
+export default function GuestMap() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-400 font-semibold">
+          Loading navigation...
+        </div>
+      }
+    >
+      <GuestMapContent />
+    </Suspense>
   );
 }
