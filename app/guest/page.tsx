@@ -78,26 +78,38 @@ function GuestMapContent() {
   const [showDestSelector, setShowDestSelector] = useState(false);
 
   useEffect(() => {
-    if (!venueId) return;
-    const fetchVenue = async () => {
-      const docRef = doc(db, "venues", venueId);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setVenue(data);
-        
-        // Extract unique floors from nodes, default to "1" if none exist
-        const uniqueFloors = Array.from(new Set(data.nodes?.map((n: any) => n.floor || "1"))) as string[];
-        const sortedFloors = uniqueFloors.sort();
-        setFloors(sortedFloors.length > 0 ? sortedFloors : ["1"]);
-        setCurrentFloor(sortedFloors.length > 0 ? sortedFloors[0] : "1");
-        
-        // Auto-set start point if there's an Entrance
-        const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
-        if (entrance) setStartNode(entrance.id);
-      }
+    // If no venueId was passed in the URL, stop loading immediately
+    if (!venueId) {
       setLoading(false);
+      return;
+    }
+
+    const fetchVenue = async () => {
+      try {
+        const docRef = doc(db, "venues", venueId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setVenue(data);
+          
+          const uniqueFloors = Array.from(new Set(data.nodes?.map((n: any) => n.floor || "1"))) as string[];
+          const sortedFloors = uniqueFloors.sort();
+          setFloors(sortedFloors.length > 0 ? sortedFloors : ["1"]);
+          setCurrentFloor(sortedFloors.length > 0 ? sortedFloors[0] : "1");
+          
+          const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
+          if (entrance) setStartNode(entrance.id);
+        } else {
+          console.warn("Venue document does not exist in Firestore.");
+        }
+      } catch (error) {
+        console.error("Firestore read error:", error);
+      } finally {
+        // ALWAYS turn off the loading spinner, no matter what happens
+        setLoading(false);
+      }
     };
+
     fetchVenue();
   }, [venueId]);
   
