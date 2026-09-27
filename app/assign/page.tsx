@@ -338,8 +338,12 @@ function PassGenerator() {
                     <p className="text-zinc-900 font-black text-xl italic tracking-tighter line-clamp-2">{targetLabel}</p>
                   </div>
                   <div className="shrink-0 bg-white p-1">
-                    <QRCodeCanvas value={previewUrl} size={70} level={"H"} fgColor="#000000" />
-                  </div>
+<QRCodeCanvas 
+  value={`${window.location.origin}/guest?venueId=${venueId}`} 
+  size={110} 
+  level={"H"} 
+  fgColor="#c2410c" 
+/>                  </div>
                 </div>
                 
                 <div className="bg-red-600 text-center py-2 z-10">
