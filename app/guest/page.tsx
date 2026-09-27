@@ -5,9 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase"; 
 import { doc, getDoc } from "firebase/firestore";
 import { Stage, Layer, Circle, Line, Text as KonvaText, Image as KonvaImage } from "react-konva";
-import { Loader2, User, Briefcase, MapPin, X, Navigation, Map as MapIcon, ZoomIn, ZoomOut } from "lucide-react";
+import { Loader2, User, Briefcase, MapPin, X, Navigation, Map as MapIcon, ZoomIn, ZoomOut, Building2 } from "lucide-react";
 
-// Dijkstra's Shortest Path Algorithm
 const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: string) => {
   const graph: any = {};
   nodes.forEach(n => graph[n.id] = {});
@@ -64,24 +63,22 @@ function GuestMapContent() {
   const venueId = searchParams.get("venueId");
   const guestName = searchParams.get("name") || "VIP Guest";
   const guestRole = searchParams.get("role") || "";
+  const guestCompany = searchParams.get("company") || ""; // Added Company!
   const guestTable = searchParams.get("table") || "";
   
   const [venue, setVenue] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   
-  // Floor and Path States
   const [currentFloor, setCurrentFloor] = useState<string>("1");
   const [floors, setFloors] = useState<string[]>([]);
   const [startNode, setStartNode] = useState<string | null>(null);
   const [destNode, setDestNode] = useState<string | null>(null);
   
-  // UI States
   const [showDestSelector, setShowDestSelector] = useState(false);
   const [showStartSelector, setShowStartSelector] = useState(false);
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
   const [scale, setScale] = useState(1);
 
-  // 1. FETCH VENUE DATA
   useEffect(() => {
     if (!venueId) { setLoading(false); return; }
     const fetchVenue = async () => {
@@ -92,7 +89,6 @@ function GuestMapContent() {
           const data = docSnap.data();
           setVenue(data);
           
-          // IMPORTANT: Changed from n.floor to n.floorId
           const uniqueFloors = Array.from(new Set(data.nodes?.map((n: any) => n.floorId || "1"))) as string[];
           const sortedFloors = uniqueFloors.sort();
           setFloors(sortedFloors.length > 0 ? sortedFloors : ["1"]);
@@ -110,36 +106,40 @@ function GuestMapContent() {
     fetchVenue();
   }, [venueId]);
 
-  // 2. LOAD BACKGROUND IMAGE DYNAMICALLY BASED ON CURRENT FLOOR
   useEffect(() => {
     if (!venue) return;
-    
-    // Look for the image in a floors array, OR fall back to the main venue imageUrl
     const floorData = venue.floors?.find((f: any) => f.id === currentFloor);
     const mapUrl = floorData?.imageUrl || floorData?.mapUrl || venue.imageUrl || venue.mapUrl;
     
     if (mapUrl) {
       const img = new window.Image();
+      // THIS IS THE MAGIC LINE THAT FIXES THE BLANK MAP
+      img.crossOrigin = "Anonymous"; 
       img.src = mapUrl;
       img.onload = () => setBgImage(img);
+      img.onerror = () => console.error("Canvas failed to load the image URL:", mapUrl);
     } else {
-      setBgImage(null); // Clear if no image found for this floor
+      setBgImage(null);
     }
   }, [currentFloor, venue]);
 
-  // 3. CALCULATE PATH
   const activePath = useMemo(() => {
     if (!venue || !startNode || !destNode) return [];
     return findShortestPath(venue.nodes || [], venue.edges || [], startNode, destNode);
   }, [venue, startNode, destNode]);
 
+  // Helper function to turn ugly floorIds into pretty readable names
+  const getFloorName = (fId: string) => {
+    if (!venue?.floors) return `Floor ${floors.indexOf(fId) + 1}`;
+    const floorObj = venue.floors.find((f: any) => f.id === fId);
+    return floorObj?.name || floorObj?.label || `Floor ${floors.indexOf(fId) + 1}`;
+  };
+
   if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>;
   if (!venue) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Venue not found.</div>;
 
-  // IMPORTANT: Filtering nodes using floorId
   const visibleNodes = (venue.nodes || []).filter((n: any) => (n.floorId || "1") === currentFloor);
   
-  // Extract path points for the current floor to make a solid line
   const activePathPoints = activePath
     .filter(id => venue.nodes.find((n: any) => n.id === id)?.floorId === currentFloor)
     .flatMap(id => {
@@ -149,80 +149,59 @@ function GuestMapContent() {
 
   return (
     <div className="fixed inset-0 bg-slate-950 overflow-hidden flex flex-col">
-      {/* Guest ID Card */}
+      
+      {/* GUEST ID CARD (Updated with Company) */}
       <div className="absolute top-0 left-0 right-0 z-10 p-4 pointer-events-none">
         <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700 p-4 rounded-2xl shadow-2xl pointer-events-auto">
           <h1 className="text-xl font-bold text-white flex items-center gap-2">
             <User className="w-5 h-5 text-emerald-400" /> {guestName}
           </h1>
-          <div className="flex gap-4 mt-2 text-xs font-semibold text-slate-300">
+          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-xs font-semibold text-slate-300">
             {guestRole && <span className="flex items-center gap-1"><Briefcase className="w-3.5 h-3.5" /> {guestRole}</span>}
+            {guestCompany && <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> {guestCompany}</span>}
             {guestTable && <span className="flex items-center gap-1 text-emerald-400"><MapPin className="w-3.5 h-3.5" /> Table {guestTable}</span>}
           </div>
         </div>
       </div>
 
-      {/* Zoom Controls */}
-      <div className="absolute top-32 right-4 z-10 flex flex-col gap-2">
+      <div className="absolute top-36 right-4 z-10 flex flex-col gap-2 pointer-events-auto">
         <button onClick={() => setScale(s => s * 1.2)} className="bg-slate-800 p-3 rounded-full text-white shadow-lg border border-slate-700">
           <ZoomIn className="w-5 h-5" />
         </button>
-        <button onClick={() => setScale(s => s / 1.2)} className="bg-slate-800 p-3 rounded-full text-white shadow-lg border border-slate-700">
+        <button onClick={() => setScale(s => Math.max(0.2, s / 1.2))} className="bg-slate-800 p-3 rounded-full text-white shadow-lg border border-slate-700">
           <ZoomOut className="w-5 h-5" />
         </button>
       </div>
 
-      {/* Interactive Map Area */}
       <div className="flex-1 w-full h-full bg-slate-900 cursor-grab active:cursor-grabbing">
-        <Stage 
-          width={window.innerWidth} 
-          height={window.innerHeight}
-          draggable // <-- This enables panning!
-          scaleX={scale} // <-- This enables zooming!
-          scaleY={scale}
-        >
+        <Stage width={window.innerWidth} height={window.innerHeight} draggable scaleX={scale} scaleY={scale}>
           <Layer>
-            {/* 1. Background Map */}
-            {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.7} />}
+            {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.6} />}
 
-            {/* 2. The Glowing Green Path */}
             {activePathPoints.length > 0 && (
-              <Line
-                points={activePathPoints}
-                stroke="#10b981"
-                strokeWidth={8}
-                lineCap="round"
-                lineJoin="round"
-                shadowColor="#10b981"
-                shadowBlur={15}
-              />
+              <Line points={activePathPoints} stroke="#10b981" strokeWidth={8} lineCap="round" lineJoin="round" shadowColor="#10b981" shadowBlur={15} />
             )}
 
-            {/* 3. Nodes (ONLY labels, start, and dest. Clutter is GONE!) */}
             {visibleNodes.map((node: any) => {
               const isStart = node.id === startNode;
               const isDest = node.id === destNode;
               const isLabeled = !!node.label;
 
-              if (!isStart && !isDest && !isLabeled) return null; // Hides all the technical dots!
+              if (!isStart && !isDest && !isLabeled) return null;
 
               return (
                 <React.Fragment key={node.id}>
                   <Circle
-                    x={node.x}
-                    y={node.y}
+                    x={node.x} y={node.y}
                     radius={isStart || isDest ? 14 : 6}
                     fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#475569"}
-                    stroke="#ffffff"
-                    strokeWidth={isStart || isDest ? 3 : 1}
-                    shadowColor="rgba(0,0,0,0.5)"
-                    shadowBlur={isStart || isDest ? 10 : 0}
+                    stroke="#ffffff" strokeWidth={isStart || isDest ? 3 : 1}
+                    shadowColor="rgba(0,0,0,0.5)" shadowBlur={isStart || isDest ? 10 : 0}
                   />
                   {node.label && (
                     <KonvaText 
                       x={node.x + 15} y={node.y - 8} 
-                      text={node.label} fill="white" 
-                      fontSize={18} fontStyle="bold" 
+                      text={node.label} fill="white" fontSize={18} fontStyle="bold" 
                       shadowColor="black" shadowBlur={4}
                     />
                   )}
@@ -233,43 +212,35 @@ function GuestMapContent() {
         </Stage>
       </div>
 
-      {/* Right Side: Floor Switcher */}
-      <div className="absolute bottom-40 right-4 z-10 flex flex-col gap-2">
+      {/* FLOOR SWITCHER (Now using readable names) */}
+      <div className="absolute bottom-40 right-4 z-10 flex flex-col gap-2 pointer-events-auto">
         {floors.length > 1 && (
-          <div className="bg-slate-800/90 backdrop-blur border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col pointer-events-auto">
+          <div className="bg-slate-800/90 backdrop-blur border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col">
             <div className="bg-slate-900 p-2 text-[10px] font-bold text-slate-400 text-center border-b border-slate-700">FLOOR</div>
             {floors.map(f => (
               <button 
                 key={f} onClick={() => setCurrentFloor(f)}
-                className={`p-4 font-bold transition ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-700"}`}
+                className={`p-4 font-bold transition whitespace-nowrap ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-700"}`}
               >
-                {f}
+                {getFloorName(f)}
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Bottom Controls */}
       <div className="absolute bottom-6 left-4 right-4 z-10 flex flex-col gap-2 pointer-events-auto">
-        <button 
-          onClick={() => setShowStartSelector(true)}
-          className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-3 rounded-xl font-semibold shadow-lg border border-slate-700 flex items-center justify-between px-4"
-        >
+        <button onClick={() => setShowStartSelector(true)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-3 rounded-xl font-semibold shadow-lg border border-slate-700 flex items-center justify-between px-4">
           <span className="flex items-center gap-2"><MapIcon className="w-4 h-4 text-blue-400" /> Start:</span>
           <span>{startNode ? venue.nodes.find((n:any)=>n.id === startNode)?.label || 'Selected' : "Choose Start"}</span>
         </button>
 
-        <button 
-          onClick={() => setShowDestSelector(true)}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-bold shadow-lg shadow-emerald-500/20 flex items-center justify-between px-4 text-lg"
-        >
+        <button onClick={() => setShowDestSelector(true)} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-bold shadow-lg shadow-emerald-500/20 flex items-center justify-between px-4 text-lg">
           <span className="flex items-center gap-2"><Navigation className="w-5 h-5" /> To:</span>
           <span>{destNode ? venue.nodes.find((n:any)=>n.id === destNode)?.label || 'Selected' : "Choose Destination"}</span>
         </button>
       </div>
 
-      {/* Selector Modals */}
       {(showDestSelector || showStartSelector) && (
         <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm transition-opacity pointer-events-auto">
           <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl p-6 w-full max-h-[70vh] flex flex-col shadow-2xl">
@@ -300,7 +271,9 @@ function GuestMapContent() {
                   className="w-full text-left p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-white font-semibold flex justify-between items-center transition"
                 >
                   <span>{node.label}</span>
-                  <span className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded">Floor {node.floorId || "1"}</span>
+                  <span className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded">
+                    {getFloorName(node.floorId || "1")}
+                  </span>
                 </button>
               ))}
             </div>
