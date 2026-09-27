@@ -1,342 +1,257 @@
 "use client";
 
-import React, { useEffect, useState, Suspense } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { db } from "@/lib/firebase"; // Adjust path if your firebase.ts is elsewhere
 import { doc, getDoc } from "firebase/firestore";
-import { db } from "../../lib/firebase";
-import { Stage, Layer, Circle, Line, Image as KonvaImage } from "react-konva";
-import useImage from "use-image";
-import { Loader2, Navigation, MapPin, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Stage, Layer, Circle, Line, Text as KonvaText } from "react-konva";
+import { Loader2, User, Briefcase, MapPin, Layers, X, Navigation } from "lucide-react";
 
-// --- GRAPH & GEOMETRY ENGINE ---
-const getDistance = (p1: any, p2: any) => Math.hypot(p2.x - p1.x, p2.y - p1.y);
-
-const doIntersect = (p1: any, q1: any, p2: any, q2: any) => {
-  const orientation = (p: any, q: any, r: any) => {
-    let val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
-    if (val === 0) return 0;
-    return (val > 0) ? 1 : 2;
-  }
-  const onSegment = (p: any, q: any, r: any) => q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) && q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
-  let o1 = orientation(p1, q1, p2); let o2 = orientation(p1, q1, q2);
-  let o3 = orientation(p2, q2, p1); let o4 = orientation(p2, q2, q1);
-  if (o1 !== o2 && o3 !== o4) return true;
-  if (o1 === 0 && onSegment(p1, p2, q1)) return true;
-  if (o2 === 0 && onSegment(p1, q2, q1)) return true;
-  if (o3 === 0 && onSegment(p2, p1, q2)) return true;
-  if (o4 === 0 && onSegment(p2, q1, q2)) return true;
-  return false;
-};
-
-const isLineClear = (p1: any, p2: any, blockades: any[]) => {
-  for (let b of blockades) {
-    const x = b.width < 0 ? b.x + b.width : b.x;
-    const y = b.height < 0 ? b.y + b.height : b.y;
-    const w = Math.abs(b.width); const h = Math.abs(b.height);
-    const pad = 2; 
-    const tl = {x: x - pad, y: y - pad}; const tr = {x: x + w + pad, y: y - pad};
-    const bl = {x: x - pad, y: y + h + pad}; const br = {x: x + w + pad, y: y + h + pad};
-    if (doIntersect(p1, p2, tl, tr)) return false;
-    if (doIntersect(p1, p2, tr, br)) return false;
-    if (doIntersect(p1, p2, br, bl)) return false;
-    if (doIntersect(p1, p2, bl, tl)) return false;
-  }
-  return true;
-};
-
-const calculateSmartPath = (start: any, end: any, blockades: any[]) => {
-  if (isLineClear(start, end, blockades)) return [start.x, start.y, end.x, end.y];
-  
-  const points = [{x: start.x, y: start.y, id: 'start'}, {x: end.x, y: end.y, id: 'end'}];
-  const pad = 15; 
-  
-  blockades.forEach((b, i) => {
-    const x = b.width < 0 ? b.x + b.width : b.x;
-    const y = b.height < 0 ? b.y + b.height : b.y;
-    const w = Math.abs(b.width); const h = Math.abs(b.height);
-    points.push({x: x - pad, y: y - pad, id: `tl_${i}`});
-    points.push({x: x + w + pad, y: y - pad, id: `tr_${i}`});
-    points.push({x: x - pad, y: y + h + pad, id: `bl_${i}`});
-    points.push({x: x + w + pad, y: y + h + pad, id: `br_${i}`});
-  });
-
+// Basic Dijkstra algorithm for pathfinding
+const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: string) => {
   const graph: any = {};
-  points.forEach(p => graph[p.id] = []);
-  
-  for (let i = 0; i < points.length; i++) {
-    for (let j = i + 1; j < points.length; j++) {
-      if (isLineClear(points[i], points[j], blockades)) {
-        const dist = getDistance(points[i], points[j]);
-        graph[points[i].id].push({node: points[j].id, weight: dist});
-        graph[points[j].id].push({node: points[i].id, weight: dist});
-      }
-    }
-  }
-  
-  const dist: any = {}; const prev: any = {}; const unvisited = new Set<string>();
-  points.forEach(p => { dist[p.id] = Infinity; unvisited.add(p.id); });
-  dist['start'] = 0;
-  
-  while (unvisited.size > 0) {
-    let u: string | null = null;
-    for (let id of unvisited) {
-      if (u === null || dist[id] < dist[u]) u = id;
-    }
-    if (!u || dist[u] === Infinity || u === 'end') break;
-    unvisited.delete(u);
-    for (let neighbor of graph[u]) {
-      let alt = dist[u] + neighbor.weight;
-      if (alt < dist[neighbor.node]) { dist[neighbor.node] = alt; prev[neighbor.node] = u; }
-    }
-  }
-  
-  const pathPoints = [];
-  let curr = 'end';
-  if (prev[curr] || curr === 'start') {
-    while (curr) {
-      const pt = points.find(p => p.id === curr);
-      if (pt) { pathPoints.unshift(pt.y); pathPoints.unshift(pt.x); }
-      curr = prev[curr];
-    }
-  }
-  return pathPoints.length > 0 ? pathPoints : [start.x, start.y, end.x, end.y];
-};
-
-const findShortestPath = (startNodeId: string, endNodeId: string, nodes: any[], edges: any[]) => {
-  if (startNodeId === endNodeId) return [startNodeId];
-  const graph: any = {};
-  nodes.forEach(n => graph[n.id] = []);
-  
+  nodes.forEach(n => graph[n.id] = {});
   edges.forEach(e => {
-    if (e.isBlocked) return; 
-    if (!graph[e.from] || !graph[e.to]) return;
     const n1 = nodes.find(n => n.id === e.from);
     const n2 = nodes.find(n => n.id === e.to);
-    const dist = getDistance(n1, n2);
-    graph[e.from].push({ node: e.to, weight: dist });
-    graph[e.to].push({ node: e.from, weight: dist });
+    if (n1 && n2) {
+      const dist = Math.hypot(n1.x - n2.x, n1.y - n2.y);
+      graph[e.from][e.to] = dist;
+      graph[e.to][e.from] = dist; // Assuming bidirectional
+    }
   });
 
-  const dist: any = {}; const prev: any = {}; const unvisited = new Set<string>();
-  nodes.forEach(n => { dist[n.id] = Infinity; unvisited.add(n.id); });
-  dist[startNodeId] = 0;
+  const distances: any = {};
+  const previous: any = {};
+  const queue = new Set<string>();
 
-  while (unvisited.size > 0) {
-    let u: string | null = null;
-    for (let id of unvisited) { if (u === null || dist[id] < dist[u]) u = id; }
-    if (!u || dist[u] === Infinity || u === endNodeId) break;
-    unvisited.delete(u);
-    for (let neighbor of graph[u]) {
-      let alt = dist[u] + neighbor.weight;
-      if (alt < dist[neighbor.node]) { dist[neighbor.node] = alt; prev[neighbor.node] = u; }
+  nodes.forEach(n => {
+    distances[n.id] = Infinity;
+    queue.add(n.id);
+  });
+  distances[startId] = 0;
+
+  while (queue.size > 0) {
+    let closestNode = null;
+    for (const nodeId of queue) {
+      if (closestNode === null || distances[nodeId] < distances[closestNode]) {
+        closestNode = nodeId;
+      }
+    }
+    
+    if (closestNode === null || closestNode === endId) break;
+    queue.delete(closestNode);
+
+    for (const neighbor in graph[closestNode]) {
+      const alt = distances[closestNode] + graph[closestNode][neighbor];
+      if (alt < distances[neighbor]) {
+        distances[neighbor] = alt;
+        previous[neighbor] = closestNode;
+      }
     }
   }
 
   const path = [];
-  let curr = endNodeId;
-  if (prev[curr] !== undefined || curr === startNodeId) {
-    while (curr) { path.unshift(curr); curr = prev[curr]; }
+  let current = endId;
+  while (current) {
+    path.unshift(current);
+    current = previous[current];
   }
-  return path;
+  return path[0] === startId ? path : [];
 };
-// --- END ENGINE ---
 
-function NavigateApp() {
+export default function GuestMap() {
   const searchParams = useSearchParams();
   const venueId = searchParams.get("venueId");
-  const defaultTargetId = searchParams.get("target");
-
-  const [venueData, setVenueData] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const guestName = searchParams.get("name") || "VIP Guest";
+  const guestRole = searchParams.get("role") || "";
+  const guestTable = searchParams.get("table") || "";
   
-  const [startId, setStartId] = useState<string>(searchParams.get("start") || "");
-  const [endId, setEndId] = useState<string>(defaultTargetId || "");
-  const [calculatedPathPoints, setCalculatedPathPoints] = useState<number[]>([]);
+  const [venue, setVenue] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   
-  const [dashOffset, setDashOffset] = useState(0);
-
-  const [windowSize, setWindowSize] = useState({ width: 300, height: 600 });
-  const [stageScale, setStageScale] = useState(1);
-  const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
-
-  useEffect(() => {
-    setWindowSize({ width: window.innerWidth, height: window.innerHeight });
-    const handleResize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight });
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  // SMOOTHER ANIMATION: Slower, more fluid march
-  useEffect(() => {
-    let animId: number;
-    let lastTime = performance.now();
-    const animate = (time: number) => {
-      const delta = time - lastTime;
-      setDashOffset((prev) => (prev - (delta * 0.04)) % 60); // Time-based smoothness
-      lastTime = time;
-      animId = requestAnimationFrame(animate);
-    };
-    animId = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animId);
-  }, []);
+  const [currentFloor, setCurrentFloor] = useState<string>("1");
+  const [floors, setFloors] = useState<string[]>(["1"]);
+  
+  const [startNode, setStartNode] = useState<string | null>(null);
+  const [destNode, setDestNode] = useState<string | null>(null);
+  const [showDestSelector, setShowDestSelector] = useState(false);
 
   useEffect(() => {
     if (!venueId) return;
     const fetchVenue = async () => {
-      try {
-        const docSnap = await getDoc(doc(db, "venues", venueId));
-        if (docSnap.exists()) setVenueData(docSnap.data());
-      } catch (error) { console.error(error); } finally { setIsLoading(false); }
+      const docRef = doc(db, "venues", venueId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setVenue(data);
+        
+        // Extract unique floors from nodes, default to "1" if none exist
+        const uniqueFloors = Array.from(new Set(data.nodes?.map((n: any) => n.floor || "1"))) as string[];
+        const sortedFloors = uniqueFloors.sort();
+        setFloors(sortedFloors.length > 0 ? sortedFloors : ["1"]);
+        setCurrentFloor(sortedFloors.length > 0 ? sortedFloors[0] : "1");
+        
+        // Auto-set start point if there's an Entrance
+        const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
+        if (entrance) setStartNode(entrance.id);
+      }
+      setLoading(false);
     };
     fetchVenue();
   }, [venueId]);
 
-  useEffect(() => {
-    if (startId && endId && venueData) {
-      if (startId === endId) {
-        setCalculatedPathPoints([]);
-        return;
-      }
+  const activePath = useMemo(() => {
+    if (!venue || !startNode || !destNode) return [];
+    return findShortestPath(venue.nodes || [], venue.edges || [], startNode, destNode);
+  }, [venue, startNode, destNode]);
 
-      let calcNodes = [...(venueData.nodes || [])];
-      let calcEdges = [...(venueData.edges || [])];
-      
-      // We grab blockades here to use for the Line-of-Sight check
-      const blockades = venueData.zones?.filter((z: any) => z.type === "blockade") || [];
+  if (loading) {
+    return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>;
+  }
+  if (!venue) {
+    return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Venue not found.</div>;
+  }
 
-      const injectZoneAsNode = (id: string, isStart: boolean) => {
-        const zone = venueData.zones?.find((z: any) => z.id === id);
-        if (zone) {
-          const zx = zone.x + (zone.width / 2); const zy = zone.y + (zone.height / 2);
-          const tempNodeId = isStart ? 'temp_start' : 'temp_end';
-          calcNodes.push({ id: tempNodeId, x: zx, y: zy });
-          
-          let validNodes = calcNodes.filter(n => n.id !== tempNodeId && !n.id.startsWith('temp_'));
-
-          // THE FIX: Only connect to nodes that have a clear Line-Of-Sight! (No snapping through walls)
-          let distances = validNodes
-            .filter(n => isLineClear({x: zx, y: zy}, n, blockades))
-            .map(n => ({ id: n.id, dist: getDistance({x: zx, y: zy}, n) }))
-            .sort((a, b) => a.dist - b.dist);
-          
-          // Fallback: If the room is completely boxed in by blockades by accident, fallback to standard distance
-          if (distances.length === 0) {
-            distances = validNodes
-              .map(n => ({ id: n.id, dist: getDistance({x: zx, y: zy}, n) }))
-              .sort((a, b) => a.dist - b.dist);
-          }
-          
-          for (let i = 0; i < Math.min(3, distances.length); i++) {
-            calcEdges.push({ id: `temp_edge_${tempNodeId}_${i}`, from: tempNodeId, to: distances[i].id });
-          }
-          return tempNodeId;
-        }
-        return id;
-      };
-
-      const finalStartId = injectZoneAsNode(startId, true);
-      const finalEndId = injectZoneAsNode(endId, false);
-      const pathIds = findShortestPath(finalStartId, finalEndId, calcNodes, calcEdges);
-      
-      let rawPoints: number[] = [];
-      pathIds.forEach(id => {
-        const node = calcNodes.find(n => n.id === id);
-        if (node) rawPoints.push(node.x, node.y);
-      });
-
-      let smartPathPoints: number[] = [];
-      if (rawPoints.length > 0) {
-        for (let i = 0; i < (rawPoints.length / 2) - 1; i++) {
-          const p1 = { x: rawPoints[i * 2], y: rawPoints[i * 2 + 1] };
-          const p2 = { x: rawPoints[(i + 1) * 2], y: rawPoints[(i + 1) * 2 + 1] };
-          const segment = calculateSmartPath(p1, p2, blockades);
-          if (i === 0) smartPathPoints.push(...segment);
-          else smartPathPoints.push(...segment.slice(2)); 
-        }
-      }
-
-      setCalculatedPathPoints(smartPathPoints);
-    } else {
-      setCalculatedPathPoints([]);
-    }
-  }, [startId, endId, venueData]);
-
-  const activeFloor = venueData?.floors?.[0]; 
-  const [bgImage] = useImage(activeFloor?.image || "");
-
-  if (!venueId) return <div className="p-8 text-white bg-slate-900 min-h-screen">Invalid Route Link.</div>;
-  if (isLoading) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-500 mb-4" /><p className="text-slate-400">Loading your route...</p></div>;
-
-  const locations = [
-    ...(venueData.zones?.filter((z: any) => z.label && z.type !== "blockade").map((z:any) => ({ id: z.id, name: z.label, type: 'zone' })) || []),
-    ...(venueData.nodes?.filter((n: any) => n.label && isNaN(Number(n.label))).map((n:any) => ({ id: n.id, name: n.label, type: 'node' })) || [])
-  ];
+  // Filter rendering elements to ONLY show the current floor
+  const visibleNodes = (venue.nodes || []).filter((n: any) => (n.floor || "1") === currentFloor);
+  const visibleEdges = (venue.edges || []).filter((e: any) => {
+    const n1 = venue.nodes.find((n: any) => n.id === e.from);
+    const n2 = venue.nodes.find((n: any) => n.id === e.to);
+    return (n1?.floor || "1") === currentFloor && (n2?.floor || "1") === currentFloor;
+  });
 
   return (
-    <div className="flex flex-col min-h-screen bg-slate-900 overflow-hidden relative">
-      <div className="absolute inset-0 cursor-grab">
-        <Stage width={windowSize.width} height={windowSize.height} scaleX={stageScale} scaleY={stageScale} x={stagePosition.x} y={stagePosition.y} draggable onDragEnd={(e) => setStagePosition({ x: e.target.x(), y: e.target.y() })}>
+    <div className="fixed inset-0 bg-slate-950 overflow-hidden flex flex-col">
+      
+      {/* GUEST INFO HEADER - Glassmorphism */}
+      <div className="absolute top-0 left-0 right-0 z-10 p-4 pointer-events-none">
+        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700 p-4 rounded-2xl shadow-2xl pointer-events-auto">
+          <h1 className="text-xl font-bold text-white flex items-center gap-2">
+            <User className="w-5 h-5 text-emerald-400" /> {guestName}
+          </h1>
+          <div className="flex gap-4 mt-2 text-xs font-semibold text-slate-300">
+            {guestRole && <span className="flex items-center gap-1"><Briefcase className="w-3.5 h-3.5" /> {guestRole}</span>}
+            {guestTable && <span className="flex items-center gap-1 text-emerald-400"><MapPin className="w-3.5 h-3.5" /> Table {guestTable}</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* THE MAP CANVAS */}
+      <div className="flex-1 w-full h-full bg-slate-950">
+        <Stage width={window.innerWidth} height={window.innerHeight}>
           <Layer>
-            {bgImage && <KonvaImage image={bgImage} opacity={0.6} />}
+            {/* Draw Edges */}
+            {visibleEdges.map((edge: any) => {
+              const fromNode = venue.nodes.find((n: any) => n.id === edge.from);
+              const toNode = venue.nodes.find((n: any) => n.id === edge.to);
+              
+              // Check if this edge is part of the glowing active path
+              const isPath = activePath.includes(edge.from) && activePath.includes(edge.to) && 
+                             Math.abs(activePath.indexOf(edge.from) - activePath.indexOf(edge.to)) === 1;
 
-            {calculatedPathPoints.length > 1 && (
-              <Line points={calculatedPathPoints} stroke="#10b981" strokeWidth={8} lineCap="round" lineJoin="round" opacity={0.3} shadowColor="#10b981" shadowBlur={15} />
-            )}
+              return (
+                <Line
+                  key={edge.id}
+                  points={[fromNode.x, fromNode.y, toNode.x, toNode.y]}
+                  stroke={isPath ? "#10b981" : "#334155"}
+                  strokeWidth={isPath ? 6 : 2}
+                  shadowColor={isPath ? "#10b981" : "transparent"}
+                  shadowBlur={isPath ? 15 : 0}
+                  lineCap="round"
+                />
+              );
+            })}
 
-            {calculatedPathPoints.length > 1 && (
-              <Line 
-                points={calculatedPathPoints} stroke="#34d399" strokeWidth={6} lineCap="round" lineJoin="round" 
-                dash={[20, 20]} // Thicker, longer dash pattern
-                dashOffset={dashOffset} 
-              />
-            )}
+            {/* Draw Nodes */}
+            {visibleNodes.map((node: any) => {
+              const isStart = node.id === startNode;
+              const isDest = node.id === destNode;
+              const inPath = activePath.includes(node.id);
 
-            {calculatedPathPoints.length > 0 && (
-              <>
-                <Circle x={calculatedPathPoints[0]} y={calculatedPathPoints[1]} radius={8} fill="#3b82f6" stroke="white" strokeWidth={3} shadowColor="#3b82f6" shadowBlur={10} />
-                <Circle x={calculatedPathPoints[calculatedPathPoints.length-2]} y={calculatedPathPoints[calculatedPathPoints.length-1]} radius={10} fill="#10b981" stroke="white" strokeWidth={3} shadowColor="#10b981" shadowBlur={10} />
-              </>
-            )}
+              return (
+                <React.Fragment key={node.id}>
+                  <Circle
+                    x={node.x}
+                    y={node.y}
+                    radius={isStart || isDest ? 12 : 6}
+                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : inPath ? "#10b981" : "#64748b"}
+                    shadowColor={inPath ? "#10b981" : "transparent"}
+                    shadowBlur={inPath ? 10 : 0}
+                  />
+                  {node.label && (
+                    <KonvaText
+                      x={node.x + 15}
+                      y={node.y - 6}
+                      text={node.label}
+                      fill="white"
+                      fontSize={14}
+                      fontStyle="bold"
+                    />
+                  )}
+                </React.Fragment>
+              );
+            })}
           </Layer>
         </Stage>
       </div>
 
-      <div className="absolute bottom-0 left-0 w-full bg-slate-800 rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.5)] p-6 border-t border-slate-700">
-        <div className="w-12 h-1.5 bg-slate-600 rounded-full mx-auto mb-6"></div>
-        <h2 className="text-white font-bold text-lg mb-4 flex items-center gap-2"><Navigation className="w-5 h-5 text-emerald-400" /> Route Finder</h2>
-        
-        <div className="space-y-4">
-          <div className="relative">
-            <MapPin className="w-4 h-4 text-blue-400 absolute left-3 top-3.5" />
-            <select value={startId} onChange={(e) => setStartId(e.target.value)} className="w-full bg-slate-900 text-white rounded-xl pl-10 pr-4 py-3 text-sm outline-none border border-slate-700 focus:border-blue-500 appearance-none">
-              <option value="" disabled>Where are you now?</option>
-              {locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
-            </select>
+      {/* FLOATING CONTROLS (Bottom Right) */}
+      <div className="absolute bottom-24 right-4 z-10 flex flex-col gap-3">
+        {floors.length > 1 && (
+          <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col">
+            <div className="bg-slate-900 p-2 text-xs font-bold text-slate-400 text-center border-b border-slate-700">FLOOR</div>
+            {floors.map(f => (
+              <button 
+                key={f} onClick={() => setCurrentFloor(f)}
+                className={`p-3 font-bold transition ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-700"}`}
+              >
+                {f}
+              </button>
+            ))}
           </div>
-          <div className="relative">
-            <MapPin className="w-4 h-4 text-emerald-400 absolute left-3 top-3.5" />
-            <select value={endId} onChange={(e) => setEndId(e.target.value)} className="w-full bg-slate-900 text-white rounded-xl pl-10 pr-4 py-3 text-sm outline-none border border-slate-700 focus:border-emerald-500 appearance-none">
-              <option value="" disabled>Where do you want to go?</option>
-              {locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {startId === endId && startId !== "" && (
-          <p className="text-blue-400 font-medium text-sm mt-4 text-center flex items-center justify-center gap-2 bg-blue-500/10 p-2 rounded-lg border border-blue-500/20">
-            <CheckCircle2 className="w-4 h-4" /> You are already here!
-          </p>
-        )}
-        {calculatedPathPoints.length === 0 && startId && endId && startId !== endId && (
-          <p className="text-red-400 font-medium text-sm mt-4 text-center flex items-center justify-center gap-2 bg-red-500/10 p-2 rounded-lg border border-red-500/20">
-            <AlertTriangle className="w-4 h-4" /> Path blocked or unreachable.
-          </p>
         )}
       </div>
+
+      {/* BOTTOM ACTION BAR */}
+      <div className="absolute bottom-4 left-4 right-4 z-10">
+        <button 
+          onClick={() => setShowDestSelector(true)}
+          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 text-lg"
+        >
+          <Navigation className="w-5 h-5" /> 
+          {destNode ? `Routing to: ${venue.nodes.find((n:any)=>n.id === destNode)?.label || 'Destination'}` : "Choose Destination"}
+        </button>
+      </div>
+
+      {/* BOTTOM SHEET: DESTINATION SELECTOR */}
+      {showDestSelector && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm transition-opacity">
+          <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl p-6 w-full max-h-[70vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-full duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-white">Where are you going?</h2>
+              <button onClick={() => setShowDestSelector(false)} className="p-2 bg-slate-800 rounded-full text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <div className="overflow-y-auto flex-1 flex flex-col gap-2 pb-8">
+              {venue.nodes.filter((n: any) => n.label).map((node: any) => (
+                <button
+                  key={node.id}
+                  onClick={() => {
+                    setDestNode(node.id);
+                    setCurrentFloor(node.floor || "1"); // Auto-switch to destination floor
+                    setShowDestSelector(false);
+                  }}
+                  className="w-full text-left p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-white font-semibold flex justify-between items-center transition"
+                >
+                  <span>{node.label}</span>
+                  <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">Floor {node.floor || "1"}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
-
-export default function Page() {
-  return <Suspense fallback={<div className="bg-slate-900 min-h-screen" />}><NavigateApp /></Suspense>;
 }
