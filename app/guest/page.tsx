@@ -5,8 +5,9 @@ import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase"; 
 import { doc, getDoc } from "firebase/firestore";
 import { Stage, Layer, Circle, Line, Text as KonvaText, Image as KonvaImage } from "react-konva";
-import { Loader2, User, Briefcase, MapPin, Layers, X, Navigation, Map as MapIcon } from "lucide-react";
+import { Loader2, User, Briefcase, MapPin, X, Navigation, Map as MapIcon, ZoomIn, ZoomOut } from "lucide-react";
 
+// Dijkstra's Shortest Path Algorithm
 const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: string) => {
   const graph: any = {};
   nodes.forEach(n => graph[n.id] = {});
@@ -67,15 +68,20 @@ function GuestMapContent() {
   
   const [venue, setVenue] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  
+  // Floor and Path States
   const [currentFloor, setCurrentFloor] = useState<string>("1");
-  const [floors, setFloors] = useState<string[]>(["1"]);
+  const [floors, setFloors] = useState<string[]>([]);
   const [startNode, setStartNode] = useState<string | null>(null);
   const [destNode, setDestNode] = useState<string | null>(null);
   
+  // UI States
   const [showDestSelector, setShowDestSelector] = useState(false);
   const [showStartSelector, setShowStartSelector] = useState(false);
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
+  const [scale, setScale] = useState(1);
 
+  // 1. FETCH VENUE DATA
   useEffect(() => {
     if (!venueId) { setLoading(false); return; }
     const fetchVenue = async () => {
@@ -86,21 +92,14 @@ function GuestMapContent() {
           const data = docSnap.data();
           setVenue(data);
           
-          const uniqueFloors = Array.from(new Set(data.nodes?.map((n: any) => n.floor || "1"))) as string[];
+          // IMPORTANT: Changed from n.floor to n.floorId
+          const uniqueFloors = Array.from(new Set(data.nodes?.map((n: any) => n.floorId || "1"))) as string[];
           const sortedFloors = uniqueFloors.sort();
           setFloors(sortedFloors.length > 0 ? sortedFloors : ["1"]);
           setCurrentFloor(sortedFloors.length > 0 ? sortedFloors[0] : "1");
           
           const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
           if (entrance) setStartNode(entrance.id);
-
-          // Load the background map image (Update 'imageUrl' if your database uses a different field name)
-          const mapUrl = data.imageUrl || data.mapUrl;
-          if (mapUrl) {
-            const img = new window.Image();
-            img.src = mapUrl;
-            img.onload = () => setBgImage(img);
-          }
         }
       } catch (error) {
         console.error(error);
@@ -111,6 +110,24 @@ function GuestMapContent() {
     fetchVenue();
   }, [venueId]);
 
+  // 2. LOAD BACKGROUND IMAGE DYNAMICALLY BASED ON CURRENT FLOOR
+  useEffect(() => {
+    if (!venue) return;
+    
+    // Look for the image in a floors array, OR fall back to the main venue imageUrl
+    const floorData = venue.floors?.find((f: any) => f.id === currentFloor);
+    const mapUrl = floorData?.imageUrl || floorData?.mapUrl || venue.imageUrl || venue.mapUrl;
+    
+    if (mapUrl) {
+      const img = new window.Image();
+      img.src = mapUrl;
+      img.onload = () => setBgImage(img);
+    } else {
+      setBgImage(null); // Clear if no image found for this floor
+    }
+  }, [currentFloor, venue]);
+
+  // 3. CALCULATE PATH
   const activePath = useMemo(() => {
     if (!venue || !startNode || !destNode) return [];
     return findShortestPath(venue.nodes || [], venue.edges || [], startNode, destNode);
@@ -119,12 +136,16 @@ function GuestMapContent() {
   if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>;
   if (!venue) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Venue not found.</div>;
 
-  const visibleNodes = (venue.nodes || []).filter((n: any) => (n.floor || "1") === currentFloor);
-  const visibleEdges = (venue.edges || []).filter((e: any) => {
-    const n1 = venue.nodes.find((n: any) => n.id === e.from);
-    const n2 = venue.nodes.find((n: any) => n.id === e.to);
-    return (n1?.floor || "1") === currentFloor && (n2?.floor || "1") === currentFloor;
-  });
+  // IMPORTANT: Filtering nodes using floorId
+  const visibleNodes = (venue.nodes || []).filter((n: any) => (n.floorId || "1") === currentFloor);
+  
+  // Extract path points for the current floor to make a solid line
+  const activePathPoints = activePath
+    .filter(id => venue.nodes.find((n: any) => n.id === id)?.floorId === currentFloor)
+    .flatMap(id => {
+      const node = venue.nodes.find((n: any) => n.id === id);
+      return [node.x, node.y];
+    });
 
   return (
     <div className="fixed inset-0 bg-slate-950 overflow-hidden flex flex-col">
@@ -141,61 +162,67 @@ function GuestMapContent() {
         </div>
       </div>
 
+      {/* Zoom Controls */}
+      <div className="absolute top-32 right-4 z-10 flex flex-col gap-2">
+        <button onClick={() => setScale(s => s * 1.2)} className="bg-slate-800 p-3 rounded-full text-white shadow-lg border border-slate-700">
+          <ZoomIn className="w-5 h-5" />
+        </button>
+        <button onClick={() => setScale(s => s / 1.2)} className="bg-slate-800 p-3 rounded-full text-white shadow-lg border border-slate-700">
+          <ZoomOut className="w-5 h-5" />
+        </button>
+      </div>
+
       {/* Interactive Map Area */}
-      <div className="flex-1 w-full h-full bg-slate-900">
-        <Stage width={window.innerWidth} height={window.innerHeight}>
+      <div className="flex-1 w-full h-full bg-slate-900 cursor-grab active:cursor-grabbing">
+        <Stage 
+          width={window.innerWidth} 
+          height={window.innerHeight}
+          draggable // <-- This enables panning!
+          scaleX={scale} // <-- This enables zooming!
+          scaleY={scale}
+        >
           <Layer>
             {/* 1. Background Map */}
             {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.7} />}
 
-            {/* 2. Path Lines (Hiding the clutter!) */}
-            {visibleEdges.map((edge: any) => {
-              const isPath = activePath.includes(edge.from) && activePath.includes(edge.to) && 
-                             Math.abs(activePath.indexOf(edge.from) - activePath.indexOf(edge.to)) === 1;
-              
-              if (!isPath) return null; // Hides all non-active edges
+            {/* 2. The Glowing Green Path */}
+            {activePathPoints.length > 0 && (
+              <Line
+                points={activePathPoints}
+                stroke="#10b981"
+                strokeWidth={8}
+                lineCap="round"
+                lineJoin="round"
+                shadowColor="#10b981"
+                shadowBlur={15}
+              />
+            )}
 
-              const fromNode = venue.nodes.find((n: any) => n.id === edge.from);
-              const toNode = venue.nodes.find((n: any) => n.id === edge.to);
-
-              return (
-                <Line
-                  key={edge.id}
-                  points={[fromNode.x, fromNode.y, toNode.x, toNode.y]}
-                  stroke="#10b981"
-                  strokeWidth={6}
-                  shadowColor="#10b981"
-                  shadowBlur={15}
-                  lineCap="round"
-                />
-              );
-            })}
-
-            {/* 3. Nodes (Only showing Start, Dest, or Labeled places) */}
+            {/* 3. Nodes (ONLY labels, start, and dest. Clutter is GONE!) */}
             {visibleNodes.map((node: any) => {
               const isStart = node.id === startNode;
               const isDest = node.id === destNode;
               const isLabeled = !!node.label;
 
-              if (!isStart && !isDest && !isLabeled) return null; // Hides all invisible routing dots
+              if (!isStart && !isDest && !isLabeled) return null; // Hides all the technical dots!
 
               return (
                 <React.Fragment key={node.id}>
                   <Circle
                     x={node.x}
                     y={node.y}
-                    radius={isStart || isDest ? 14 : 8}
+                    radius={isStart || isDest ? 14 : 6}
                     fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#475569"}
                     stroke="#ffffff"
-                    strokeWidth={2}
+                    strokeWidth={isStart || isDest ? 3 : 1}
                     shadowColor="rgba(0,0,0,0.5)"
-                    shadowBlur={10}
+                    shadowBlur={isStart || isDest ? 10 : 0}
                   />
                   {node.label && (
                     <KonvaText 
-                      x={node.x + 18} y={node.y - 8} 
+                      x={node.x + 15} y={node.y - 8} 
                       text={node.label} fill="white" 
-                      fontSize={16} fontStyle="bold" 
+                      fontSize={18} fontStyle="bold" 
                       shadowColor="black" shadowBlur={4}
                     />
                   )}
@@ -207,14 +234,14 @@ function GuestMapContent() {
       </div>
 
       {/* Right Side: Floor Switcher */}
-      <div className="absolute bottom-36 right-4 z-10 flex flex-col gap-2">
-        {floors.length > 0 && (
-          <div className="bg-slate-800/90 backdrop-blur border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col">
+      <div className="absolute bottom-40 right-4 z-10 flex flex-col gap-2">
+        {floors.length > 1 && (
+          <div className="bg-slate-800/90 backdrop-blur border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col pointer-events-auto">
             <div className="bg-slate-900 p-2 text-[10px] font-bold text-slate-400 text-center border-b border-slate-700">FLOOR</div>
             {floors.map(f => (
               <button 
                 key={f} onClick={() => setCurrentFloor(f)}
-                className={`p-3 font-bold transition ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-700"}`}
+                className={`p-4 font-bold transition ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-700"}`}
               >
                 {f}
               </button>
@@ -224,7 +251,7 @@ function GuestMapContent() {
       </div>
 
       {/* Bottom Controls */}
-      <div className="absolute bottom-6 left-4 right-4 z-10 flex flex-col gap-2">
+      <div className="absolute bottom-6 left-4 right-4 z-10 flex flex-col gap-2 pointer-events-auto">
         <button 
           onClick={() => setShowStartSelector(true)}
           className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-3 rounded-xl font-semibold shadow-lg border border-slate-700 flex items-center justify-between px-4"
@@ -242,9 +269,9 @@ function GuestMapContent() {
         </button>
       </div>
 
-      {/* Selector Modals (Used for both Start and Destination) */}
+      {/* Selector Modals */}
       {(showDestSelector || showStartSelector) && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm transition-opacity">
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm transition-opacity pointer-events-auto">
           <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl p-6 w-full max-h-[70vh] flex flex-col shadow-2xl">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-white">
@@ -263,16 +290,17 @@ function GuestMapContent() {
                     if (showStartSelector) {
                       setStartNode(node.id);
                       setShowStartSelector(false);
+                      setCurrentFloor(node.floorId || "1");
                     } else {
                       setDestNode(node.id);
-                      setCurrentFloor(node.floor || "1");
+                      setCurrentFloor(node.floorId || "1");
                       setShowDestSelector(false);
                     }
                   }}
                   className="w-full text-left p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-white font-semibold flex justify-between items-center transition"
                 >
                   <span>{node.label}</span>
-                  <span className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded">Floor {node.floor || "1"}</span>
+                  <span className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded">Floor {node.floorId || "1"}</span>
                 </button>
               ))}
             </div>
