@@ -2,12 +2,11 @@
 
 import React, { useState, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { db } from "@/lib/firebase"; // Adjust path if your firebase.ts is elsewhere
+import { db } from "@/lib/firebase"; 
 import { doc, getDoc } from "firebase/firestore";
-import { Stage, Layer, Circle, Line, Text as KonvaText } from "react-konva";
-import { Loader2, User, Briefcase, MapPin, Layers, X, Navigation } from "lucide-react";
+import { Stage, Layer, Circle, Line, Text as KonvaText, Image as KonvaImage } from "react-konva";
+import { Loader2, User, Briefcase, MapPin, Layers, X, Navigation, Map as MapIcon } from "lucide-react";
 
-// Basic Dijkstra algorithm for pathfinding
 const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: string) => {
   const graph: any = {};
   nodes.forEach(n => graph[n.id] = {});
@@ -17,7 +16,7 @@ const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: st
     if (n1 && n2) {
       const dist = Math.hypot(n1.x - n2.x, n1.y - n2.y);
       graph[e.from][e.to] = dist;
-      graph[e.to][e.from] = dist; // Assuming bidirectional
+      graph[e.to][e.from] = dist; 
     }
   });
 
@@ -38,7 +37,6 @@ const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: st
         closestNode = nodeId;
       }
     }
-    
     if (closestNode === null || closestNode === endId) break;
     queue.delete(closestNode);
 
@@ -69,21 +67,17 @@ function GuestMapContent() {
   
   const [venue, setVenue] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  
   const [currentFloor, setCurrentFloor] = useState<string>("1");
   const [floors, setFloors] = useState<string[]>(["1"]);
-  
   const [startNode, setStartNode] = useState<string | null>(null);
   const [destNode, setDestNode] = useState<string | null>(null);
+  
   const [showDestSelector, setShowDestSelector] = useState(false);
+  const [showStartSelector, setShowStartSelector] = useState(false);
+  const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
-    // If no venueId was passed in the URL, stop loading immediately
-    if (!venueId) {
-      setLoading(false);
-      return;
-    }
-
+    if (!venueId) { setLoading(false); return; }
     const fetchVenue = async () => {
       try {
         const docRef = doc(db, "venues", venueId);
@@ -99,34 +93,32 @@ function GuestMapContent() {
           
           const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
           if (entrance) setStartNode(entrance.id);
-        } else {
-          console.warn("Venue document does not exist in Firestore.");
+
+          // Load the background map image (Update 'imageUrl' if your database uses a different field name)
+          const mapUrl = data.imageUrl || data.mapUrl;
+          if (mapUrl) {
+            const img = new window.Image();
+            img.src = mapUrl;
+            img.onload = () => setBgImage(img);
+          }
         }
       } catch (error) {
-        console.error("Firestore read error:", error);
+        console.error(error);
       } finally {
-        // ALWAYS turn off the loading spinner, no matter what happens
         setLoading(false);
       }
     };
-
     fetchVenue();
   }, [venueId]);
-  
 
   const activePath = useMemo(() => {
     if (!venue || !startNode || !destNode) return [];
     return findShortestPath(venue.nodes || [], venue.edges || [], startNode, destNode);
   }, [venue, startNode, destNode]);
 
-  if (loading) {
-    return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>;
-  }
-  if (!venue) {
-    return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Venue not found.</div>;
-  }
+  if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>;
+  if (!venue) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Venue not found.</div>;
 
-  // Filter rendering elements to ONLY show the current floor
   const visibleNodes = (venue.nodes || []).filter((n: any) => (n.floor || "1") === currentFloor);
   const visibleEdges = (venue.edges || []).filter((e: any) => {
     const n1 = venue.nodes.find((n: any) => n.id === e.from);
@@ -136,10 +128,9 @@ function GuestMapContent() {
 
   return (
     <div className="fixed inset-0 bg-slate-950 overflow-hidden flex flex-col">
-      
-      {/* GUEST INFO HEADER - Glassmorphism */}
+      {/* Guest ID Card */}
       <div className="absolute top-0 left-0 right-0 z-10 p-4 pointer-events-none">
-        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700 p-4 rounded-2xl shadow-2xl pointer-events-auto">
+        <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700 p-4 rounded-2xl shadow-2xl pointer-events-auto">
           <h1 className="text-xl font-bold text-white flex items-center gap-2">
             <User className="w-5 h-5 text-emerald-400" /> {guestName}
           </h1>
@@ -150,56 +141,62 @@ function GuestMapContent() {
         </div>
       </div>
 
-      {/* THE MAP CANVAS */}
-      <div className="flex-1 w-full h-full bg-slate-950">
+      {/* Interactive Map Area */}
+      <div className="flex-1 w-full h-full bg-slate-900">
         <Stage width={window.innerWidth} height={window.innerHeight}>
           <Layer>
-            {/* Draw Edges */}
+            {/* 1. Background Map */}
+            {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.7} />}
+
+            {/* 2. Path Lines (Hiding the clutter!) */}
             {visibleEdges.map((edge: any) => {
-              const fromNode = venue.nodes.find((n: any) => n.id === edge.from);
-              const toNode = venue.nodes.find((n: any) => n.id === edge.to);
-              
-              // Check if this edge is part of the glowing active path
               const isPath = activePath.includes(edge.from) && activePath.includes(edge.to) && 
                              Math.abs(activePath.indexOf(edge.from) - activePath.indexOf(edge.to)) === 1;
+              
+              if (!isPath) return null; // Hides all non-active edges
+
+              const fromNode = venue.nodes.find((n: any) => n.id === edge.from);
+              const toNode = venue.nodes.find((n: any) => n.id === edge.to);
 
               return (
                 <Line
                   key={edge.id}
                   points={[fromNode.x, fromNode.y, toNode.x, toNode.y]}
-                  stroke={isPath ? "#10b981" : "#334155"}
-                  strokeWidth={isPath ? 6 : 2}
-                  shadowColor={isPath ? "#10b981" : "transparent"}
-                  shadowBlur={isPath ? 15 : 0}
+                  stroke="#10b981"
+                  strokeWidth={6}
+                  shadowColor="#10b981"
+                  shadowBlur={15}
                   lineCap="round"
                 />
               );
             })}
 
-            {/* Draw Nodes */}
+            {/* 3. Nodes (Only showing Start, Dest, or Labeled places) */}
             {visibleNodes.map((node: any) => {
               const isStart = node.id === startNode;
               const isDest = node.id === destNode;
-              const inPath = activePath.includes(node.id);
+              const isLabeled = !!node.label;
+
+              if (!isStart && !isDest && !isLabeled) return null; // Hides all invisible routing dots
 
               return (
                 <React.Fragment key={node.id}>
                   <Circle
                     x={node.x}
                     y={node.y}
-                    radius={isStart || isDest ? 12 : 6}
-                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : inPath ? "#10b981" : "#64748b"}
-                    shadowColor={inPath ? "#10b981" : "transparent"}
-                    shadowBlur={inPath ? 10 : 0}
+                    radius={isStart || isDest ? 14 : 8}
+                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#475569"}
+                    stroke="#ffffff"
+                    strokeWidth={2}
+                    shadowColor="rgba(0,0,0,0.5)"
+                    shadowBlur={10}
                   />
                   {node.label && (
-                    <KonvaText
-                      x={node.x + 15}
-                      y={node.y - 6}
-                      text={node.label}
-                      fill="white"
-                      fontSize={14}
-                      fontStyle="bold"
+                    <KonvaText 
+                      x={node.x + 18} y={node.y - 8} 
+                      text={node.label} fill="white" 
+                      fontSize={16} fontStyle="bold" 
+                      shadowColor="black" shadowBlur={4}
                     />
                   )}
                 </React.Fragment>
@@ -209,11 +206,11 @@ function GuestMapContent() {
         </Stage>
       </div>
 
-      {/* FLOATING CONTROLS (Bottom Right) */}
-      <div className="absolute bottom-24 right-4 z-10 flex flex-col gap-3">
-        {floors.length > 1 && (
-          <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col">
-            <div className="bg-slate-900 p-2 text-xs font-bold text-slate-400 text-center border-b border-slate-700">FLOOR</div>
+      {/* Right Side: Floor Switcher */}
+      <div className="absolute bottom-36 right-4 z-10 flex flex-col gap-2">
+        {floors.length > 0 && (
+          <div className="bg-slate-800/90 backdrop-blur border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col">
+            <div className="bg-slate-900 p-2 text-[10px] font-bold text-slate-400 text-center border-b border-slate-700">FLOOR</div>
             {floors.map(f => (
               <button 
                 key={f} onClick={() => setCurrentFloor(f)}
@@ -226,24 +223,36 @@ function GuestMapContent() {
         )}
       </div>
 
-      {/* BOTTOM ACTION BAR */}
-      <div className="absolute bottom-4 left-4 right-4 z-10">
+      {/* Bottom Controls */}
+      <div className="absolute bottom-6 left-4 right-4 z-10 flex flex-col gap-2">
+        <button 
+          onClick={() => setShowStartSelector(true)}
+          className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-3 rounded-xl font-semibold shadow-lg border border-slate-700 flex items-center justify-between px-4"
+        >
+          <span className="flex items-center gap-2"><MapIcon className="w-4 h-4 text-blue-400" /> Start:</span>
+          <span>{startNode ? venue.nodes.find((n:any)=>n.id === startNode)?.label || 'Selected' : "Choose Start"}</span>
+        </button>
+
         <button 
           onClick={() => setShowDestSelector(true)}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 text-lg"
+          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-bold shadow-lg shadow-emerald-500/20 flex items-center justify-between px-4 text-lg"
         >
-          <Navigation className="w-5 h-5" /> 
-          {destNode ? `Routing to: ${venue.nodes.find((n:any)=>n.id === destNode)?.label || 'Destination'}` : "Choose Destination"}
+          <span className="flex items-center gap-2"><Navigation className="w-5 h-5" /> To:</span>
+          <span>{destNode ? venue.nodes.find((n:any)=>n.id === destNode)?.label || 'Selected' : "Choose Destination"}</span>
         </button>
       </div>
 
-      {/* BOTTOM SHEET: DESTINATION SELECTOR */}
-      {showDestSelector && (
+      {/* Selector Modals (Used for both Start and Destination) */}
+      {(showDestSelector || showStartSelector) && (
         <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm transition-opacity">
-          <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl p-6 w-full max-h-[70vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-full duration-200">
+          <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl p-6 w-full max-h-[70vh] flex flex-col shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-white">Where are you going?</h2>
-              <button onClick={() => setShowDestSelector(false)} className="p-2 bg-slate-800 rounded-full text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              <h2 className="text-xl font-bold text-white">
+                {showStartSelector ? "Where are you starting?" : "Where do you want to go?"}
+              </h2>
+              <button onClick={() => { setShowDestSelector(false); setShowStartSelector(false); }} className="p-2 bg-slate-800 rounded-full text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
             </div>
             
             <div className="overflow-y-auto flex-1 flex flex-col gap-2 pb-8">
@@ -251,14 +260,19 @@ function GuestMapContent() {
                 <button
                   key={node.id}
                   onClick={() => {
-                    setDestNode(node.id);
-                    setCurrentFloor(node.floor || "1"); // Auto-switch to destination floor
-                    setShowDestSelector(false);
+                    if (showStartSelector) {
+                      setStartNode(node.id);
+                      setShowStartSelector(false);
+                    } else {
+                      setDestNode(node.id);
+                      setCurrentFloor(node.floor || "1");
+                      setShowDestSelector(false);
+                    }
                   }}
                   className="w-full text-left p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-white font-semibold flex justify-between items-center transition"
                 >
                   <span>{node.label}</span>
-                  <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">Floor {node.floor || "1"}</span>
+                  <span className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded">Floor {node.floor || "1"}</span>
                 </button>
               ))}
             </div>
@@ -268,15 +282,10 @@ function GuestMapContent() {
     </div>
   );
 }
+
 export default function GuestMap() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-400 font-semibold">
-          Loading navigation...
-        </div>
-      }
-    >
+    <Suspense fallback={<div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>}>
       <GuestMapContent />
     </Suspense>
   );
