@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase"; 
 import { doc, getDoc } from "firebase/firestore";
 import { Stage, Layer, Circle, Line, Text as KonvaText, Image as KonvaImage } from "react-konva";
-import { Loader2, User, Briefcase, MapPin, X, Navigation, Building2, Layers } from "lucide-react";
+import { Loader2, User, Briefcase, MapPin, X, Navigation, Building2, ChevronDown } from "lucide-react";
 
 // --- DIJKSTRA ALGORITHM ---
 const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: string) => {
@@ -52,8 +52,8 @@ function GuestMapContent() {
   const searchParams = useSearchParams();
   const venueId = searchParams.get("venueId");
   
-  // These rely on the QR code passing them! If missing, they default.
-  const guestName = searchParams.get("name") || "VIP Guest";
+  // STRIPPED OUT THE FALLBACKS. If it's missing, it stays empty.
+  const guestName = searchParams.get("name") || "";
   const guestRole = searchParams.get("role") || "";
   const guestCompany = searchParams.get("company") || "";
   const guestTable = searchParams.get("table") || "";
@@ -68,8 +68,9 @@ function GuestMapContent() {
   
   const [showDestSelector, setShowDestSelector] = useState(false);
   const [showStartSelector, setShowStartSelector] = useState(false);
+  const [showFloorDropdown, setShowFloorDropdown] = useState(false);
+  
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
-
   const stageRef = useRef<any>(null);
   const [lastDist, setLastDist] = useState(0);
 
@@ -97,32 +98,26 @@ function GuestMapContent() {
     fetchVenue();
   }, [venueId]);
 
-  // 2. LOAD IMAGE SECURELY
+  // 2. LOAD IMAGE (Direct approach to bypass the fetch error you saw)
   useEffect(() => {
     if (!venue) return;
     const floorData = venue.floors?.find((f: any) => f.id === currentFloor);
     const mapUrl = floorData?.imageUrl || floorData?.mapUrl || venue.imageUrl || venue.mapUrl;
     
-    if (!mapUrl) { setBgImage(null); return; }
+    if (!mapUrl) { 
+      setBgImage(null); 
+      return; 
+    }
 
-    let objectUrl = "";
-    const fetchImage = async () => {
-      try {
-        const response = await fetch(mapUrl);
-        const blob = await response.blob();
-        objectUrl = URL.createObjectURL(blob);
-        const img = new window.Image();
-        img.src = objectUrl;
-        img.onload = () => setBgImage(img);
-      } catch (error) { console.error(error); }
-    };
-    fetchImage();
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    const img = new window.Image();
+    img.src = mapUrl;
+    img.onload = () => setBgImage(img);
+    img.onerror = () => console.error("Canvas failed to load the image URL.");
   }, [currentFloor, venue]);
 
   // 3. PINCH-TO-ZOOM GESTURES
   const handleTouchMove = (e: any) => {
-    e.evt.preventDefault(); // CRITICAL: Stops browser from scrolling the page
+    e.evt.preventDefault();
     const touch1 = e.evt.touches[0];
     const touch2 = e.evt.touches[1];
 
@@ -141,7 +136,7 @@ function GuestMapContent() {
       const oldScale = stage.scaleX();
       
       let newScale = oldScale * scaleBy;
-      newScale = Math.max(0.2, Math.min(newScale, 5)); // Limit zoom
+      newScale = Math.max(0.2, Math.min(newScale, 5));
 
       const pointTo = {
         x: (center.x - stage.x()) / oldScale,
@@ -167,9 +162,9 @@ function GuestMapContent() {
   }, [venue, startNode, destNode]);
 
   const getFloorName = (fId: string) => {
-    if (!venue?.floors) return fId;
+    if (!venue?.floors) return `Floor ${fId}`;
     const floorObj = venue.floors.find((f: any) => f.id === fId);
-    return floorObj?.name || floorObj?.label || fId;
+    return floorObj?.name || floorObj?.label || `Floor ${fId}`;
   };
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-500" /></div>;
@@ -183,8 +178,10 @@ function GuestMapContent() {
       return [node.x, node.y];
     });
 
+  // Decide if we should render the guest card at all
+  const hasGuestInfo = guestName || guestRole || guestCompany || guestTable;
+
   return (
-    // "touch-action: none" is the magic CSS that allows canvas pinch-to-zoom to actually work!
     <div className="fixed inset-0 bg-slate-950 overflow-hidden font-sans" style={{ touchAction: 'none' }}>
       
       {/* MAP CANVAS */}
@@ -197,38 +194,35 @@ function GuestMapContent() {
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
-          {/* LAYER 1: STRICTLY BACKGROUND IMAGE (Always on bottom) */}
           <Layer>
             {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.7} />}
           </Layer>
 
-          {/* LAYER 2: STRICTLY PATHS AND NODES (Always on top of image) */}
           <Layer>
-            {/* Path */}
             {activePathPoints.length > 0 && (
               <Line points={activePathPoints} stroke="#10b981" strokeWidth={8} lineCap="round" lineJoin="round" />
             )}
 
-            {/* Nodes - RUTHLESS FILTERING */}
             {visibleNodes.map((node: any) => {
               const isStart = node.id === startNode;
               const isDest = node.id === destNode;
+              const isLabeled = !!node.label;
 
-              // If it's not the start, and not the destination... DELETE IT. Zero clutter.
-              if (!isStart && !isDest) return null; 
+              // Only hide completely nameless routing dots
+              if (!isStart && !isDest && !isLabeled) return null; 
 
               return (
                 <React.Fragment key={node.id}>
                   <Circle
                     x={node.x} y={node.y}
-                    radius={isStart ? 12 : 14}
-                    fill={isStart ? "#3b82f6" : "#ef4444"}
-                    stroke="#ffffff" strokeWidth={3}
+                    radius={isStart ? 12 : isDest ? 14 : 7}
+                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#64748b"}
+                    stroke="#ffffff" strokeWidth={isStart || isDest ? 3 : 1.5}
                   />
                   {node.label && (
                     <KonvaText 
-                      x={node.x + 20} y={node.y - 10} 
-                      text={node.label} fill="#ffffff" fontSize={20} fontStyle="bold" 
+                      x={node.x + 15} y={node.y - 8} 
+                      text={node.label} fill="#ffffff" fontSize={18} fontStyle="bold" 
                     />
                   )}
                 </React.Fragment>
@@ -238,34 +232,52 @@ function GuestMapContent() {
         </Stage>
       </div>
 
-      {/* TOP GUEST INFO CARD (Pushed down with top-12 to clear Phone Notch) */}
-      <div className="absolute top-12 left-4 right-4 z-10 pointer-events-none">
-        <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 p-4 rounded-2xl shadow-xl">
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <User className="w-5 h-5 text-emerald-400" /> {guestName}
-          </h1>
-          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-sm font-medium text-slate-300">
-            {guestRole && <span className="flex items-center gap-1.5"><Briefcase className="w-4 h-4" /> {guestRole}</span>}
-            {guestCompany && <span className="flex items-center gap-1.5"><Building2 className="w-4 h-4" /> {guestCompany}</span>}
-            {guestTable && <span className="flex items-center gap-1.5 text-emerald-400"><MapPin className="w-4 h-4" /> Table {guestTable}</span>}
+      {/* TOP HEADER AREA: GUEST INFO (LEFT) & FLOOR DROPDOWN (RIGHT) */}
+      <div className="absolute top-12 left-4 right-4 z-20 flex justify-between items-start pointer-events-none">
+        
+        {/* GUEST INFO CARD - ONLY SHOWS IF THERE IS DATA */}
+        {hasGuestInfo ? (
+          <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 p-4 rounded-2xl shadow-xl max-w-[65%] pointer-events-auto">
+            {guestName && (
+              <h1 className="text-xl font-bold text-white flex items-center gap-2 mb-1">
+                <User className="w-5 h-5 text-emerald-400" /> {guestName}
+              </h1>
+            )}
+            <div className="flex flex-col gap-1.5 text-sm font-medium text-slate-300">
+              {guestRole && <span className="flex items-center gap-1.5"><Briefcase className="w-4 h-4" /> {guestRole}</span>}
+              {guestCompany && <span className="flex items-center gap-1.5"><Building2 className="w-4 h-4" /> {guestCompany}</span>}
+              {guestTable && <span className="flex items-center gap-1.5 text-emerald-400"><MapPin className="w-4 h-4" /> Table {guestTable}</span>}
+            </div>
           </div>
-        </div>
-      </div>
+        ) : (
+          <div /> // Empty div to keep flexbox spacing correct
+        )}
 
-      {/* RIGHT SIDE FLOORS (Sleek Circular Buttons) */}
-      <div className="absolute right-4 top-1/2 -translate-y-1/2 z-10 flex flex-col gap-3 pointer-events-auto">
-        {floors.length > 1 && floors.map(f => (
-          <button 
-            key={f} onClick={() => setCurrentFloor(f)}
-            className={`w-14 h-14 rounded-full flex items-center justify-center font-bold text-sm shadow-xl transition-all border ${
-              currentFloor === f 
-              ? "bg-emerald-500 text-white border-emerald-400 scale-110" 
-              : "bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-700"
-            }`}
-          >
-            {getFloorName(f)}
-          </button>
-        ))}
+        {/* CLEAN FLOOR DROPDOWN */}
+        {floors.length > 1 && (
+          <div className="relative pointer-events-auto">
+            <button 
+              onClick={() => setShowFloorDropdown(!showFloorDropdown)}
+              className="bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 text-white font-bold px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 transition"
+            >
+              {getFloorName(currentFloor)} <ChevronDown className="w-4 h-4" />
+            </button>
+
+            {showFloorDropdown && (
+              <div className="absolute top-full right-0 mt-2 bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 rounded-xl shadow-2xl flex flex-col overflow-hidden w-40">
+                {floors.map(f => (
+                  <button 
+                    key={f} 
+                    onClick={() => { setCurrentFloor(f); setShowFloorDropdown(false); }}
+                    className={`px-4 py-3 text-sm font-bold text-left transition ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-800"}`}
+                  >
+                    {getFloorName(f)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* BOTTOM NAVIGATION CONTROLS */}
