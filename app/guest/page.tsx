@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, Suspense } from "react";
+import React, { useState, useEffect, useMemo, Suspense, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase"; 
 import { doc, getDoc } from "firebase/firestore";
 import { Stage, Layer, Circle, Line, Text as KonvaText, Image as KonvaImage } from "react-konva";
-import { Loader2, User, Briefcase, MapPin, X, Navigation, Map as MapIcon, ZoomIn, ZoomOut, Building2 } from "lucide-react";
+import { Loader2, User, Briefcase, MapPin, X, Navigation, Building2 } from "lucide-react";
 
+// --- DIJKSTRA ALGORITHM ---
 const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: string) => {
   const graph: any = {};
   nodes.forEach(n => graph[n.id] = {});
@@ -24,37 +25,26 @@ const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: st
   const previous: any = {};
   const queue = new Set<string>();
 
-  nodes.forEach(n => {
-    distances[n.id] = Infinity;
-    queue.add(n.id);
-  });
+  nodes.forEach(n => { distances[n.id] = Infinity; queue.add(n.id); });
   distances[startId] = 0;
 
   while (queue.size > 0) {
     let closestNode = null;
     for (const nodeId of queue) {
-      if (closestNode === null || distances[nodeId] < distances[closestNode]) {
-        closestNode = nodeId;
-      }
+      if (closestNode === null || distances[nodeId] < distances[closestNode]) closestNode = nodeId;
     }
     if (closestNode === null || closestNode === endId) break;
     queue.delete(closestNode);
 
     for (const neighbor in graph[closestNode]) {
       const alt = distances[closestNode] + graph[closestNode][neighbor];
-      if (alt < distances[neighbor]) {
-        distances[neighbor] = alt;
-        previous[neighbor] = closestNode;
-      }
+      if (alt < distances[neighbor]) { distances[neighbor] = alt; previous[neighbor] = closestNode; }
     }
   }
 
   const path = [];
   let current = endId;
-  while (current) {
-    path.unshift(current);
-    current = previous[current];
-  }
+  while (current) { path.unshift(current); current = previous[current]; }
   return path[0] === startId ? path : [];
 };
 
@@ -63,7 +53,7 @@ function GuestMapContent() {
   const venueId = searchParams.get("venueId");
   const guestName = searchParams.get("name") || "VIP Guest";
   const guestRole = searchParams.get("role") || "";
-  const guestCompany = searchParams.get("company") || ""; // Added Company!
+  const guestCompany = searchParams.get("company") || "";
   const guestTable = searchParams.get("table") || "";
   
   const [venue, setVenue] = useState<any>(null);
@@ -77,8 +67,11 @@ function GuestMapContent() {
   const [showDestSelector, setShowDestSelector] = useState(false);
   const [showStartSelector, setShowStartSelector] = useState(false);
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
-  const [scale, setScale] = useState(1);
 
+  const stageRef = useRef<any>(null);
+  const [lastDist, setLastDist] = useState(0);
+
+  // 1. FETCH VENUE
   useEffect(() => {
     if (!venueId) { setLoading(false); return; }
     const fetchVenue = async () => {
@@ -97,69 +90,106 @@ function GuestMapContent() {
           const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
           if (entrance) setStartNode(entrance.id);
         }
-      } catch (error) {
-        console.error(error);
-      } finally {
-        setLoading(false);
-      }
+      } catch (error) { console.error(error); } finally { setLoading(false); }
     };
     fetchVenue();
   }, [venueId]);
 
+  // 2. LOAD IMAGE SECURELY
   useEffect(() => {
     if (!venue) return;
     const floorData = venue.floors?.find((f: any) => f.id === currentFloor);
     const mapUrl = floorData?.imageUrl || floorData?.mapUrl || venue.imageUrl || venue.mapUrl;
     
-    if (!mapUrl) {
-      setBgImage(null);
-      return;
-    }
+    if (!mapUrl) { setBgImage(null); return; }
 
     let objectUrl = "";
-
-    const fetchImageAsBlob = async () => {
+    const fetchImage = async () => {
       try {
-        // Fetch the image data directly
         const response = await fetch(mapUrl);
         const blob = await response.blob();
-        
-        // Create a secure local URL that the canvas won't block
         objectUrl = URL.createObjectURL(blob);
-        
         const img = new window.Image();
         img.src = objectUrl;
         img.onload = () => setBgImage(img);
-      } catch (error) {
-        console.error("Failed to load map image safely:", error);
-      }
+      } catch (error) { console.error(error); }
     };
-
-    fetchImageAsBlob();
-
-    // Cleanup memory when the floor changes
-    return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
+    fetchImage();
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [currentFloor, venue]);
+
+  // 3. PINCH-TO-ZOOM GESTURES (Direct manipulation for zero lag)
+  const handleTouchMove = (e: any) => {
+    e.evt.preventDefault();
+    const touch1 = e.evt.touches[0];
+    const touch2 = e.evt.touches[1];
+
+    if (touch1 && touch2) {
+      const stage = stageRef.current;
+      if (!stage) return;
+      if (stage.isDragging()) stage.stopDrag();
+
+      const p1 = { x: touch1.clientX, y: touch1.clientY };
+      const p2 = { x: touch2.clientX, y: touch2.clientY };
+      const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+      if (!lastDist) { setLastDist(dist); return; }
+
+      const center = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      const scaleBy = dist / lastDist;
+      const oldScale = stage.scaleX();
+      
+      let newScale = oldScale * scaleBy;
+      newScale = Math.max(0.2, Math.min(newScale, 5)); // Limit zoom
+
+      const pointTo = {
+        x: (center.x - stage.x()) / oldScale,
+        y: (center.y - stage.y()) / oldScale,
+      };
+
+      const newPos = {
+        x: center.x - pointTo.x * newScale,
+        y: center.y - pointTo.y * newScale,
+      };
+
+      stage.scale({ x: newScale, y: newScale });
+      stage.position(newPos);
+      setLastDist(dist);
+    }
+  };
+
+  const handleTouchEnd = () => { setLastDist(0); };
+
+  const handleWheel = (e: any) => {
+    e.evt.preventDefault();
+    const stage = stageRef.current;
+    if (!stage) return;
+    const oldScale = stage.scaleX();
+    const pointer = stage.getPointerPosition();
+    const mousePointTo = { x: (pointer.x - stage.x()) / oldScale, y: (pointer.y - stage.y()) / oldScale };
+    
+    const scaleBy = 1.1;
+    const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+    stage.scale({ x: newScale, y: newScale });
+    
+    const newPos = { x: pointer.x - mousePointTo.x * newScale, y: pointer.y - mousePointTo.y * newScale };
+    stage.position(newPos);
+  };
 
   const activePath = useMemo(() => {
     if (!venue || !startNode || !destNode) return [];
     return findShortestPath(venue.nodes || [], venue.edges || [], startNode, destNode);
   }, [venue, startNode, destNode]);
 
-  // Helper function to turn ugly floorIds into pretty readable names
   const getFloorName = (fId: string) => {
     if (!venue?.floors) return `Floor ${floors.indexOf(fId) + 1}`;
     const floorObj = venue.floors.find((f: any) => f.id === fId);
     return floorObj?.name || floorObj?.label || `Floor ${floors.indexOf(fId) + 1}`;
   };
 
-  if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>;
-  if (!venue) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Venue not found.</div>;
+  if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>;
+  if (!venue) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Venue not found.</div>;
 
   const visibleNodes = (venue.nodes || []).filter((n: any) => (n.floorId || "1") === currentFloor);
-  
   const activePathPoints = activePath
     .filter(id => venue.nodes.find((n: any) => n.id === id)?.floorId === currentFloor)
     .flatMap(id => {
@@ -168,69 +198,47 @@ function GuestMapContent() {
     });
 
   return (
-    <div className="fixed inset-0 bg-slate-950 overflow-hidden flex flex-col">
+    <div className="fixed inset-0 bg-slate-950 overflow-hidden font-sans touch-none select-none">
       
-      {/* GUEST ID CARD (Updated with Company) */}
-      <div className="absolute top-0 left-0 right-0 z-10 p-4 pointer-events-none">
-        <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700 p-4 rounded-2xl shadow-2xl pointer-events-auto">
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <User className="w-5 h-5 text-emerald-400" /> {guestName}
-          </h1>
-          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-xs font-semibold text-slate-300">
-            {guestRole && <span className="flex items-center gap-1"><Briefcase className="w-3.5 h-3.5" /> {guestRole}</span>}
-            {guestCompany && <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> {guestCompany}</span>}
-            {guestTable && <span className="flex items-center gap-1 text-emerald-400"><MapPin className="w-3.5 h-3.5" /> Table {guestTable}</span>}
-          </div>
-        </div>
-      </div>
-
-      <div className="absolute top-36 right-4 z-10 flex flex-col gap-2 pointer-events-auto">
-        <button onClick={() => setScale(s => s * 1.2)} className="bg-slate-800 p-3 rounded-full text-white shadow-lg border border-slate-700">
-          <ZoomIn className="w-5 h-5" />
-        </button>
-        <button onClick={() => setScale(s => Math.max(0.2, s / 1.2))} className="bg-slate-800 p-3 rounded-full text-white shadow-lg border border-slate-700">
-          <ZoomOut className="w-5 h-5" />
-        </button>
-      </div>
-
-      <div className="flex-1 w-full h-full bg-slate-900 cursor-grab active:cursor-grabbing">
-        <Stage width={window.innerWidth} height={window.innerHeight} draggable scaleX={scale} scaleY={scale}>
+      {/* MAP CANVAS LAYER (Sits behind everything) */}
+      <div className="absolute inset-0">
+        <Stage 
+          width={window.innerWidth} 
+          height={window.innerHeight} 
+          draggable 
+          ref={stageRef}
+          onWheel={handleWheel}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
           <Layer>
-            {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.6} />}
+            {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.8} />}
 
+            {/* Path */}
             {activePathPoints.length > 0 && (
-              <Line points={activePathPoints} stroke="#10b981" strokeWidth={8} lineCap="round" lineJoin="round" shadowColor="#10b981" shadowBlur={15} />
+              <Line points={activePathPoints} stroke="#10b981" strokeWidth={6} lineCap="round" lineJoin="round" />
             )}
 
-            {/* 3. Clean Nodes: ONLY labels, start, and dest. Clutter is GONE! */}
+            {/* Nodes - strictly NO shadows to fix mobile lag */}
             {visibleNodes.map((node: any) => {
               const isStart = node.id === startNode;
               const isDest = node.id === destNode;
-              const isLabeledZone = !!node.label;
+              const isLabeled = !!node.label;
 
-              // IF IT'S JUST A ROUTING DOT, DO NOT RENDER IT AT ALL
-              if (!isStart && !isDest && !isLabeledZone) return null; 
+              if (!isStart && !isDest && !isLabeled) return null; // Zero Clutter
 
               return (
                 <React.Fragment key={node.id}>
                   <Circle
                     x={node.x} y={node.y}
-                    // Start/Dest get big markers, labeled zones get small markers
-                    radius={isStart || isDest ? 14 : 6}
-                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#64748b"}
-                    stroke="#ffffff" strokeWidth={isStart || isDest ? 3 : 1.5}
-                    shadowColor="rgba(0,0,0,0.4)" shadowBlur={isStart || isDest ? 10 : 4}
+                    radius={isStart ? 12 : isDest ? 14 : 5}
+                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#cbd5e1"}
+                    stroke="#ffffff" strokeWidth={2}
                   />
-                  {/* Only render text if the node actually has a label */}
                   {node.label && (
                     <KonvaText 
-                      x={node.x + 16} y={node.y - 8} 
-                      text={node.label} 
-                      fill="#ffffff" 
-                      fontSize={16} 
-                      fontStyle="bold" 
-                      shadowColor="#000000" 
-                      shadowBlur={6}
+                      x={node.x + 15} y={node.y - 8} 
+                      text={node.label} fill="#ffffff" fontSize={16} fontStyle="bold" 
                     />
                   )}
                 </React.Fragment>
@@ -240,15 +248,28 @@ function GuestMapContent() {
         </Stage>
       </div>
 
-      {/* FLOOR SWITCHER (Now using readable names) */}
-      <div className="absolute bottom-40 right-4 z-10 flex flex-col gap-2 pointer-events-auto">
+      {/* TOP GUEST INFO CARD (Premium Floating Glass) */}
+      <div className="absolute top-4 left-4 right-4 z-10 pointer-events-none">
+        <div className="bg-slate-900/70 backdrop-blur-xl border border-slate-700/50 p-4 rounded-2xl shadow-xl">
+          <h1 className="text-xl font-bold text-white flex items-center gap-2">
+            <User className="w-5 h-5 text-emerald-400" /> {guestName}
+          </h1>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-sm font-medium text-slate-300">
+            {guestRole && <span className="flex items-center gap-1.5"><Briefcase className="w-4 h-4" /> {guestRole}</span>}
+            {guestCompany && <span className="flex items-center gap-1.5"><Building2 className="w-4 h-4" /> {guestCompany}</span>}
+            {guestTable && <span className="flex items-center gap-1.5 text-emerald-400"><MapPin className="w-4 h-4" /> Table {guestTable}</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* RIGHT SIDE FLOORS */}
+      <div className="absolute top-1/3 right-4 z-10 flex flex-col gap-2">
         {floors.length > 1 && (
-          <div className="bg-slate-800/90 backdrop-blur border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col">
-            <div className="bg-slate-900 p-2 text-[10px] font-bold text-slate-400 text-center border-b border-slate-700">FLOOR</div>
+          <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-2xl overflow-hidden shadow-lg flex flex-col pointer-events-auto">
             {floors.map(f => (
               <button 
                 key={f} onClick={() => setCurrentFloor(f)}
-                className={`p-4 font-bold transition whitespace-nowrap ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-700"}`}
+                className={`p-4 text-sm font-bold transition whitespace-nowrap border-b border-slate-700/50 last:border-0 ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-800"}`}
               >
                 {getFloorName(f)}
               </button>
@@ -257,49 +278,48 @@ function GuestMapContent() {
         )}
       </div>
 
-      <div className="absolute bottom-6 left-4 right-4 z-10 flex flex-col gap-2 pointer-events-auto">
-        <button onClick={() => setShowStartSelector(true)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-3 rounded-xl font-semibold shadow-lg border border-slate-700 flex items-center justify-between px-4">
-          <span className="flex items-center gap-2"><MapIcon className="w-4 h-4 text-blue-400" /> Start:</span>
-          <span>{startNode ? venue.nodes.find((n:any)=>n.id === startNode)?.label || 'Selected' : "Choose Start"}</span>
-        </button>
+      {/* BOTTOM NAVIGATION CONTROLS */}
+      <div className="absolute bottom-6 left-4 right-4 z-10 flex flex-col gap-3 pointer-events-auto">
+        <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 p-2 rounded-2xl shadow-2xl flex flex-col gap-2">
+          
+          <button onClick={() => setShowStartSelector(true)} className="w-full bg-slate-800/80 hover:bg-slate-700 text-slate-200 py-3.5 rounded-xl font-semibold flex items-center justify-between px-4 transition">
+            <span className="flex items-center gap-2 text-slate-400"><Navigation className="w-4 h-4 text-blue-400" /> Start</span>
+            <span className="text-white truncate max-w-[200px]">{startNode ? venue.nodes.find((n:any)=>n.id === startNode)?.label || 'Selected' : "Tap to set start"}</span>
+          </button>
 
-        <button onClick={() => setShowDestSelector(true)} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-bold shadow-lg shadow-emerald-500/20 flex items-center justify-between px-4 text-lg">
-          <span className="flex items-center gap-2"><Navigation className="w-5 h-5" /> To:</span>
-          <span>{destNode ? venue.nodes.find((n:any)=>n.id === destNode)?.label || 'Selected' : "Choose Destination"}</span>
-        </button>
+          <button onClick={() => setShowDestSelector(true)} className="w-full bg-emerald-500 hover:bg-emerald-400 text-white py-4 rounded-xl font-bold flex items-center justify-between px-4 transition shadow-lg shadow-emerald-500/20 text-lg">
+            <span className="flex items-center gap-2"><MapPin className="w-5 h-5" /> Destination</span>
+            <span className="truncate max-w-[180px]">{destNode ? venue.nodes.find((n:any)=>n.id === destNode)?.label || 'Selected' : "Tap to route"}</span>
+          </button>
+
+        </div>
       </div>
 
+      {/* FULL SCREEN SELECTOR MODALS */}
       {(showDestSelector || showStartSelector) && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm transition-opacity pointer-events-auto">
-          <div className="bg-slate-900 border-t border-slate-700 rounded-t-3xl p-6 w-full max-h-[70vh] flex flex-col shadow-2xl">
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-slate-950/80 backdrop-blur-md pointer-events-auto transition-all">
+          <div className="bg-slate-900 border-t border-slate-800 rounded-t-3xl p-6 w-full h-[85vh] flex flex-col shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-white">
-                {showStartSelector ? "Where are you starting?" : "Where do you want to go?"}
+              <h2 className="text-2xl font-bold text-white">
+                {showStartSelector ? "Select Start" : "Select Destination"}
               </h2>
-              <button onClick={() => { setShowDestSelector(false); setShowStartSelector(false); }} className="p-2 bg-slate-800 rounded-full text-slate-400 hover:text-white">
+              <button onClick={() => { setShowDestSelector(false); setShowStartSelector(false); }} className="p-3 bg-slate-800 rounded-full text-slate-400 hover:text-white transition">
                 <X className="w-5 h-5" />
               </button>
             </div>
             
-            <div className="overflow-y-auto flex-1 flex flex-col gap-2 pb-8">
+            <div className="overflow-y-auto flex-1 flex flex-col gap-3 pb-8">
               {venue.nodes.filter((n: any) => n.label).map((node: any) => (
                 <button
                   key={node.id}
                   onClick={() => {
-                    if (showStartSelector) {
-                      setStartNode(node.id);
-                      setShowStartSelector(false);
-                      setCurrentFloor(node.floorId || "1");
-                    } else {
-                      setDestNode(node.id);
-                      setCurrentFloor(node.floorId || "1");
-                      setShowDestSelector(false);
-                    }
+                    if (showStartSelector) { setStartNode(node.id); setShowStartSelector(false); setCurrentFloor(node.floorId || "1"); } 
+                    else { setDestNode(node.id); setCurrentFloor(node.floorId || "1"); setShowDestSelector(false); }
                   }}
-                  className="w-full text-left p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-white font-semibold flex justify-between items-center transition"
+                  className="w-full text-left p-5 bg-slate-800/50 hover:bg-slate-700 border border-slate-700/50 rounded-2xl text-white font-semibold flex justify-between items-center transition"
                 >
-                  <span>{node.label}</span>
-                  <span className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded">
+                  <span className="text-lg">{node.label}</span>
+                  <span className="text-xs font-bold text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg">
                     {getFloorName(node.floorId || "1")}
                   </span>
                 </button>
@@ -314,7 +334,7 @@ function GuestMapContent() {
 
 export default function GuestMap() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-slate-900 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-500" /></div>}>
+    <Suspense fallback={<div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-500" /></div>}>
       <GuestMapContent />
     </Suspense>
   );
