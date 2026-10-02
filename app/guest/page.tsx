@@ -111,16 +111,36 @@ function GuestMapContent() {
     const floorData = venue.floors?.find((f: any) => f.id === currentFloor);
     const mapUrl = floorData?.imageUrl || floorData?.mapUrl || venue.imageUrl || venue.mapUrl;
     
-    if (mapUrl) {
-      const img = new window.Image();
-      // THIS IS THE MAGIC LINE THAT FIXES THE BLANK MAP
-      //img.crossOrigin = "Anonymous"; 
-      img.src = mapUrl;
-      img.onload = () => setBgImage(img);
-      img.onerror = () => console.error("Canvas failed to load the image URL:", mapUrl);
-    } else {
+    if (!mapUrl) {
       setBgImage(null);
+      return;
     }
+
+    let objectUrl = "";
+
+    const fetchImageAsBlob = async () => {
+      try {
+        // Fetch the image data directly
+        const response = await fetch(mapUrl);
+        const blob = await response.blob();
+        
+        // Create a secure local URL that the canvas won't block
+        objectUrl = URL.createObjectURL(blob);
+        
+        const img = new window.Image();
+        img.src = objectUrl;
+        img.onload = () => setBgImage(img);
+      } catch (error) {
+        console.error("Failed to load map image safely:", error);
+      }
+    };
+
+    fetchImageAsBlob();
+
+    // Cleanup memory when the floor changes
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [currentFloor, venue]);
 
   const activePath = useMemo(() => {
@@ -182,27 +202,35 @@ function GuestMapContent() {
               <Line points={activePathPoints} stroke="#10b981" strokeWidth={8} lineCap="round" lineJoin="round" shadowColor="#10b981" shadowBlur={15} />
             )}
 
+            {/* 3. Clean Nodes: ONLY labels, start, and dest. Clutter is GONE! */}
             {visibleNodes.map((node: any) => {
               const isStart = node.id === startNode;
               const isDest = node.id === destNode;
-              const isLabeled = !!node.label;
+              const isLabeledZone = !!node.label;
 
-              if (!isStart && !isDest && !isLabeled) return null;
+              // IF IT'S JUST A ROUTING DOT, DO NOT RENDER IT AT ALL
+              if (!isStart && !isDest && !isLabeledZone) return null; 
 
               return (
                 <React.Fragment key={node.id}>
                   <Circle
                     x={node.x} y={node.y}
+                    // Start/Dest get big markers, labeled zones get small markers
                     radius={isStart || isDest ? 14 : 6}
-                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#475569"}
-                    stroke="#ffffff" strokeWidth={isStart || isDest ? 3 : 1}
-                    shadowColor="rgba(0,0,0,0.5)" shadowBlur={isStart || isDest ? 10 : 0}
+                    fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : "#64748b"}
+                    stroke="#ffffff" strokeWidth={isStart || isDest ? 3 : 1.5}
+                    shadowColor="rgba(0,0,0,0.4)" shadowBlur={isStart || isDest ? 10 : 4}
                   />
+                  {/* Only render text if the node actually has a label */}
                   {node.label && (
                     <KonvaText 
-                      x={node.x + 15} y={node.y - 8} 
-                      text={node.label} fill="white" fontSize={18} fontStyle="bold" 
-                      shadowColor="black" shadowBlur={4}
+                      x={node.x + 16} y={node.y - 8} 
+                      text={node.label} 
+                      fill="#ffffff" 
+                      fontSize={16} 
+                      fontStyle="bold" 
+                      shadowColor="#000000" 
+                      shadowBlur={6}
                     />
                   )}
                 </React.Fragment>
