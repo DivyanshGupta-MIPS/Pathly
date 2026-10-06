@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, Suspense } from "react";
 import { Stage, Layer, Circle, Line, Image as KonvaImage, Text as KonvaText } from "react-konva";
 import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { Loader2, MousePointer2, PlusCircle, Route, Trash2, Save, Layers, Settings2, MapPin, Search } from "lucide-react";
 
-export default function HostEditor() {
+function EditorContent() {
   const searchParams = useSearchParams();
   const venueId = searchParams.get("venueId") || "default-venue"; // Fallback for testing
 
@@ -284,5 +284,16 @@ export default function HostEditor() {
       </aside>
 
     </div>
+  );
+}
+export default function HostEditor() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#09090b] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+      </div>
+    }>
+      <EditorContent />
+    </Suspense>
   );
 }
