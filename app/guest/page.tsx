@@ -7,12 +7,11 @@ import { doc, getDoc } from "firebase/firestore";
 import { getStorage, ref as storageRef, getDownloadURL } from "firebase/storage";
 import type Konva from "konva";
 import { Stage, Layer, Circle, Line, Rect, Group, RegularPolygon, Text as KonvaText, Image as KonvaImage } from "react-konva";
-import { Loader2, User, Briefcase, MapPin, X, Navigation, Building2, ChevronDown } from "lucide-react";
+import { Loader2, User, Briefcase, MapPin, X, Navigation, Building2, ChevronDown, Compass, Sparkles } from "lucide-react";
 
-// ---------- helpers ----------
+// ---------- Helpers ----------
 const floorOf = (n: any) => String(n?.floorId || "1");
 
-// Firestore field names we accept for a map image
 const URL_KEYS = ["imageUrl", "mapUrl", "image", "url", "floorPlan", "floorplanUrl", "backgroundImage", "bgImage"];
 const pickUrl = (o: any): string => {
   if (!o) return "";
@@ -27,7 +26,7 @@ const measure = (text: string, font: string) => {
   return ctx.measureText(text).width;
 };
 
-// --- DIJKSTRA ALGORITHM ---
+// --- Dijkstra Algorithm ---
 const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: string): string[] => {
   const graph: Record<string, Record<string, number>> = {};
   nodes.forEach(n => (graph[n.id] = {}));
@@ -64,9 +63,9 @@ const findShortestPath = (nodes: any[], edges: any[], startId: string, endId: st
   return path[0] === startId ? path : [];
 };
 
-// ---------- animated route: arrows flowing along the path ----------
-const ARROW_GAP = 70;   // map px between arrows
-const ARROW_SPEED = 110; // map px per second
+// --- Animated Flowing Route ---
+const ARROW_GAP = 65;
+const ARROW_SPEED = 120;
 
 function AnimatedRoute({ points }: { points: number[] }) {
   const arrowsRef = useRef<Konva.Group>(null);
@@ -103,7 +102,7 @@ function AnimatedRoute({ points }: { points: number[] }) {
         }
         const k = d - seg.start;
         arrow.position({ x: seg.x + Math.cos(seg.angle) * k, y: seg.y + Math.sin(seg.angle) * k });
-        arrow.rotation((seg.angle * 180) / Math.PI + 90); // triangle apex points "up" at 0deg
+        arrow.rotation((seg.angle * 180) / Math.PI + 90);
       });
       group.getLayer()?.batchDraw();
       raf = requestAnimationFrame(tick);
@@ -114,34 +113,34 @@ function AnimatedRoute({ points }: { points: number[] }) {
 
   return (
     <>
-      <Line points={points} stroke="#065f46" strokeWidth={13} lineCap="round" lineJoin="round" opacity={0.85} listening={false} />
+      <Line points={points} stroke="#052e16" strokeWidth={14} lineCap="round" lineJoin="round" opacity={0.6} listening={false} />
       <Line points={points} stroke="#10b981" strokeWidth={8} lineCap="round" lineJoin="round" listening={false} />
       <Group ref={arrowsRef} listening={false}>
         {Array.from({ length: count }, (_, i) => (
-          <RegularPolygon key={i} sides={3} radius={10} fill="#ffffff" stroke="#047857" strokeWidth={1.5} scaleX={0.85} scaleY={1.25} />
+          <RegularPolygon key={i} sides={3} radius={9} fill="#ffffff" stroke="#047857" strokeWidth={1} scaleX={0.8} scaleY={1.3} />
         ))}
       </Group>
     </>
   );
 }
 
-// ---------- guest name + position tag shown on the VIP place ----------
+// --- Dynamic VIP Tag ---
 function GuestTag({ x, y, name, role }: { x: number; y: number; name: string; role: string }) {
   const { w, h } = useMemo(() => {
-    const nameW = name ? measure(name, "bold 20px sans-serif") : 0;
-    const roleW = role ? measure(role, "15px sans-serif") : 0;
-    return { w: Math.min(Math.max(nameW, roleW) + 28, 300), h: name && role ? 58 : 38 };
+    const nameW = name ? measure(name, "bold 18px sans-serif") : 0;
+    const roleW = role ? measure(role, "13px sans-serif") : 0;
+    return { w: Math.min(Math.max(nameW, roleW) + 32, 280), h: name && role ? 54 : 36 };
   }, [name, role]);
 
   const left = x - w / 2;
-  const top = y - h - 24;
+  const top = y - h - 22;
 
   return (
     <Group listening={false}>
-      <Rect x={left} y={top} width={w} height={h} cornerRadius={10} fill="#0f172a" stroke="#f59e0b" strokeWidth={2.5} shadowColor="#000" shadowBlur={10} shadowOpacity={0.5} />
-      <Line points={[x - 9, top + h, x + 9, top + h, x, top + h + 10]} closed fill="#f59e0b" />
-      {name && <KonvaText x={left + 14} y={top + 9} width={w - 28} wrap="none" ellipsis text={name} fill="#ffffff" fontSize={20} fontStyle="bold" />}
-      {role && <KonvaText x={left + 14} y={top + (name ? 33 : 11)} width={w - 28} wrap="none" ellipsis text={role} fill="#fbbf24" fontSize={15} />}
+      <Rect x={left} y={top} width={w} height={h} cornerRadius={12} fill="#09090b" stroke="#10b981" strokeWidth={2} shadowColor="#000" shadowBlur={12} shadowOpacity={0.6} />
+      <Line points={[x - 7, top + h, x + 7, top + h, x, top + h + 8]} closed fill="#10b981" />
+      {name && <KonvaText x={left + 16} y={top + 8} width={w - 32} wrap="none" ellipsis text={name} fill="#ffffff" fontSize={16} fontStyle="bold" />}
+      {role && <KonvaText x={left + 16} y={top + (name ? 30 : 10)} width={w - 32} wrap="none" ellipsis text={role} fill="#a1a1aa" fontSize={13} />}
     </Group>
   );
 }
@@ -154,6 +153,10 @@ function GuestMapContent() {
   const guestRole = searchParams.get("role") || "";
   const guestCompany = searchParams.get("company") || "";
   const guestTable = searchParams.get("table") || "";
+
+  // Auto-routing parameters passed from QR pass
+  const urlStartNode = searchParams.get("start");
+  const urlDestNode = searchParams.get("dest") || searchParams.get("target");
 
   const [venue, setVenue] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -173,7 +176,6 @@ function GuestMapContent() {
   const stageRef = useRef<Konva.Stage>(null);
   const lastDist = useRef(0);
 
-  // Stage size (no window access during render)
   useEffect(() => {
     const update = () => setDims({ w: window.innerWidth, h: window.innerHeight });
     update();
@@ -181,7 +183,7 @@ function GuestMapContent() {
     return () => window.removeEventListener("resize", update);
   }, []);
 
-  // 1. FETCH VENUE
+  // 1. Fetch Venue & Configure Auto-Route
   useEffect(() => {
     if (!venueId) { setLoading(false); return; }
     const fetchVenue = async () => {
@@ -196,17 +198,31 @@ function GuestMapContent() {
           setFloors(sorted.length > 0 ? sorted : ["1"]);
           setCurrentFloor(sorted.length > 0 ? sorted[0] : "1");
 
-          const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
-          if (entrance) setStartNode(entrance.id);
+          // Start node resolution
+          if (urlStartNode && data.nodes?.some((n: any) => n.id === urlStartNode)) {
+            setStartNode(urlStartNode);
+          } else {
+            const entrance = data.nodes?.find((n: any) => n.label?.toLowerCase().includes("entrance"));
+            if (entrance) setStartNode(entrance.id);
+          }
+
+          // Destination node resolution
+          if (urlDestNode && data.nodes?.some((n: any) => n.id === urlDestNode)) {
+            setDestNode(urlDestNode);
+            const destFloor = data.nodes?.find((n: any) => n.id === urlDestNode)?.floorId;
+            if (destFloor) setCurrentFloor(destFloor);
+          }
         }
-      } catch (error) { console.error(error); } finally { setLoading(false); }
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
     };
     fetchVenue();
-  }, [venueId]);
+  }, [venueId, urlStartNode, urlDestNode]);
 
-  // 2. LOAD FLOOR MAP IMAGE
-  // Deliberately NO crossOrigin attribute: it makes loading fail when the storage bucket has no CORS rule,
-  // and we only display the image (we never export the canvas).
+  // 2. Fetch Floor Image
   useEffect(() => {
     if (!venue) return;
     let cancelled = false;
@@ -217,37 +233,35 @@ function GuestMapContent() {
     const floorData = floorsArr.find(f => String(f?.id) === currentFloor) ?? (floorsArr.length === 1 ? floorsArr[0] : undefined);
     const raw = pickUrl(floorData) || pickUrl(venue);
 
-    if (!raw) { setMapError("No map image URL found for this floor in Firestore."); return; }
+    if (!raw) { setMapError("No map image assigned to this floor."); return; }
 
     (async () => {
       try {
-        // gs:// links and bare storage paths must be converted to a download URL first
         const url = /^(https?:|data:|blob:|\/)/.test(raw) ? raw : await getDownloadURL(storageRef(getStorage(), raw));
         const img = new window.Image();
         img.onload = () => { if (!cancelled) setBgImage(img); };
-        img.onerror = () => { if (!cancelled) setMapError("Floor map failed to load: " + url); };
+        img.onerror = () => { if (!cancelled) setMapError("Unable to render floor blueprint."); };
         img.src = url;
       } catch (e) {
         console.error(e);
-        if (!cancelled) setMapError("Could not resolve map image: " + raw);
+        if (!cancelled) setMapError("Blueprint loading failed.");
       }
     })();
 
     return () => { cancelled = true; };
   }, [currentFloor, venue]);
 
-  // 2b. Fit the map to the screen when an image loads (otherwise large images show only a corner)
+  // Fit image on load
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage || !bgImage || !dims.w) return;
-    const s = Math.min(dims.w / bgImage.width, dims.h / bgImage.height) * 0.95;
+    const s = Math.min(dims.w / bgImage.width, dims.h / bgImage.height) * 0.92;
     stage.scale({ x: s, y: s });
     stage.position({ x: (dims.w - bgImage.width * s) / 2, y: (dims.h - bgImage.height * s) / 2 });
     stage.batchDraw();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bgImage]);
+  }, [bgImage, dims]);
 
-  // 3. ZOOM: pinch (touch) + wheel (desktop)
+  // Gestures
   const handleTouchMove = (e: Konva.KonvaEventObject<TouchEvent>) => {
     e.evt.preventDefault();
     const [t1, t2] = [e.evt.touches[0], e.evt.touches[1]];
@@ -286,7 +300,6 @@ function GuestMapContent() {
     return findShortestPath(venue.nodes || [], venue.edges || [], startNode, destNode);
   }, [venue, startNode, destNode]);
 
-  // Path split into continuous runs on the current floor
   const routeRuns = useMemo(() => {
     const nodes: any[] = venue?.nodes || [];
     const runs: number[][] = [];
@@ -300,33 +313,49 @@ function GuestMapContent() {
     return runs.filter(r => r.length >= 4);
   }, [activePath, venue, currentFloor]);
 
-  // The VIP place: a node labelled "VIP", else the node matching the guest's table
   const vipNode = useMemo(() => {
     const nodes: any[] = venue?.nodes || [];
     const t = guestTable.trim().toLowerCase();
     const byVip = nodes.find(n => /vip/i.test(n.label || ""));
     if (byVip) return byVip;
     if (!t) return null;
-    return nodes.find(n => { const l = String(n.label || "").toLowerCase().trim(); return l === t || l === `table ${t}`; }) || null;
+    return nodes.find(n => {
+      const l = String(n.label || "").toLowerCase().trim();
+      return l === t || l === `table ${t}`;
+    }) || null;
   }, [venue, guestTable]);
 
   const getFloorName = (fId: string) => {
     const arr: any[] = Array.isArray(venue?.floors) ? venue.floors : Object.values(venue?.floors || {});
     const floorObj = arr.find(f => String(f?.id) === fId);
-    return floorObj?.name || floorObj?.label || `Floor ${fId}`;
+    return floorObj?.name || floorObj?.label || `Level ${fId}`;
   };
 
-  if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-500" /></div>;
-  if (!venue) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">{venueId ? "Venue not found." : "Missing venueId in the link."}</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#09090b] flex flex-col items-center justify-center gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+        <span className="text-xs uppercase tracking-widest text-zinc-500 font-semibold">Configuring Wayfinder</span>
+      </div>
+    );
+  }
+
+  if (!venue) {
+    return (
+      <div className="min-h-screen bg-[#09090b] flex items-center justify-center text-zinc-400 font-medium">
+        {venueId ? "Venue directory not found." : "Invalid access link."}
+      </div>
+    );
+  }
 
   const visibleNodes = (venue.nodes || []).filter((n: any) => floorOf(n) === currentFloor);
-  const hasGuestInfo = guestName || guestRole || guestCompany || guestTable;
-  const noRoute = !!startNode && !!destNode && startNode !== destNode && activePath.length === 0;
+  const startNodeObj = venue.nodes?.find((n: any) => n.id === startNode);
+  const destNodeObj = venue.nodes?.find((n: any) => n.id === destNode);
 
   return (
-    <div className="fixed inset-0 bg-slate-950 overflow-hidden font-sans" style={{ touchAction: "none" }}>
-
-      {/* MAP CANVAS */}
+    <div className="fixed inset-0 bg-[#09090b] text-white overflow-hidden font-sans select-none" style={{ touchAction: "none" }}>
+      
+      {/* Canvas Layer */}
       <div className="absolute inset-0 z-0">
         {dims.w > 0 && (
           <Stage
@@ -339,11 +368,13 @@ function GuestMapContent() {
             onWheel={handleWheel}
           >
             <Layer listening={false}>
-              {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.7} />}
+              {bgImage && <KonvaImage image={bgImage} x={0} y={0} opacity={0.8} />}
             </Layer>
 
             <Layer>
-              {routeRuns.map((run, i) => <AnimatedRoute key={`${currentFloor}-${i}-${run.length}-${run[0]}-${run[1]}`} points={run} />)}
+              {routeRuns.map((run, i) => (
+                <AnimatedRoute key={`${currentFloor}-${i}-${run.length}`} points={run} />
+              ))}
 
               {visibleNodes.map((node: any) => {
                 const isStart = node.id === startNode;
@@ -355,15 +386,26 @@ function GuestMapContent() {
                 return (
                   <React.Fragment key={node.id}>
                     <Circle
-                      x={node.x} y={node.y}
-                      radius={isStart ? 12 : isDest ? 14 : isVip ? 14 : 7}
-                      fill={isStart ? "#3b82f6" : isDest ? "#ef4444" : isVip ? "#f59e0b" : "#64748b"}
-                      stroke="#ffffff" strokeWidth={isStart || isDest || isVip ? 3 : 1.5}
+                      x={node.x}
+                      y={node.y}
+                      radius={isStart ? 11 : isDest ? 13 : isVip ? 13 : 6}
+                      fill={isStart ? "#38bdf8" : isDest ? "#ef4444" : isVip ? "#10b981" : "#52525b"}
+                      stroke="#ffffff"
+                      strokeWidth={isStart || isDest || isVip ? 2.5 : 1.2}
                     />
                     {showGuestTag ? (
                       <GuestTag x={node.x} y={node.y} name={guestName} role={guestRole} />
                     ) : (
-                      node.label && <KonvaText x={node.x + 15} y={node.y - 8} text={node.label} fill="#ffffff" fontSize={18} fontStyle="bold" />
+                      node.label && (
+                        <KonvaText
+                          x={node.x + 14}
+                          y={node.y - 7}
+                          text={node.label}
+                          fill="#f4f4f5"
+                          fontSize={15}
+                          fontStyle="600"
+                        />
+                      )
                     )}
                   </React.Fragment>
                 );
@@ -373,41 +415,49 @@ function GuestMapContent() {
         )}
       </div>
 
-      {/* TOP HEADER AREA: GUEST INFO (LEFT) & FLOOR DROPDOWN (RIGHT) */}
-      <div className="absolute top-12 left-4 right-4 z-20 flex justify-between items-start pointer-events-none">
-        {hasGuestInfo ? (
-          <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 p-4 rounded-2xl shadow-xl max-w-[65%] pointer-events-auto">
-            {guestName && (
-              <h1 className="text-xl font-bold text-white flex items-center gap-2 mb-1">
-                <User className="w-5 h-5 text-emerald-400" /> {guestName}
-              </h1>
-            )}
-            <div className="flex flex-col gap-1.5 text-sm font-medium text-slate-300">
-              {guestRole && <span className="flex items-center gap-1.5"><Briefcase className="w-4 h-4" /> {guestRole}</span>}
-              {guestCompany && <span className="flex items-center gap-1.5"><Building2 className="w-4 h-4" /> {guestCompany}</span>}
-              {guestTable && <span className="flex items-center gap-1.5 text-emerald-400"><MapPin className="w-4 h-4" /> Table {guestTable}</span>}
+      {/* Top Floating Header (Dynamic Island Style) */}
+      <div className="absolute top-12 left-4 right-4 z-20 flex items-center justify-between pointer-events-none">
+        {guestName ? (
+          <div className="bg-zinc-900/80 backdrop-blur-2xl border border-white/10 px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-3 pointer-events-auto">
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold tracking-tight text-zinc-100">{guestName}</span>
+              {(guestRole || guestTable) && (
+                <span className="text-[11px] text-zinc-400 font-medium">
+                  {guestRole}{guestRole && guestTable ? " • " : ""}{guestTable ? `Table ${guestTable}` : ""}
+                </span>
+              )}
             </div>
           </div>
         ) : (
-          <div />
+          <div className="bg-zinc-900/80 backdrop-blur-2xl border border-white/10 px-4 py-2 rounded-full flex items-center gap-2 pointer-events-auto shadow-xl">
+            <Compass className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-300">Live Navigation</span>
+          </div>
         )}
 
+        {/* Minimal Floor Dropdown */}
         {floors.length > 1 && (
           <div className="relative pointer-events-auto">
             <button
               onClick={() => setShowFloorDropdown(!showFloorDropdown)}
-              className="bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 text-white font-bold px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 transition"
+              className="bg-zinc-900/80 backdrop-blur-2xl border border-white/10 text-xs font-semibold tracking-wide text-zinc-200 px-3.5 py-2.5 rounded-full shadow-2xl flex items-center gap-2 active:scale-95 transition"
             >
-              {getFloorName(currentFloor)} <ChevronDown className="w-4 h-4" />
+              <span>{getFloorName(currentFloor)}</span>
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
             </button>
 
             {showFloorDropdown && (
-              <div className="absolute top-full right-0 mt-2 bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 rounded-xl shadow-2xl flex flex-col overflow-hidden w-40">
+              <div className="absolute top-full right-0 mt-2 bg-zinc-900/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden min-w-[130px] p-1.5 flex flex-col gap-1">
                 {floors.map(f => (
                   <button
                     key={f}
                     onClick={() => { setCurrentFloor(f); setShowFloorDropdown(false); }}
-                    className={`px-4 py-3 text-sm font-bold text-left transition ${currentFloor === f ? "bg-emerald-500 text-white" : "text-slate-300 hover:bg-slate-800"}`}
+                    className={`px-3 py-2 text-xs font-medium rounded-xl text-left transition ${
+                      currentFloor === f
+                        ? "bg-emerald-500/20 text-emerald-400 font-semibold"
+                        : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60"
+                    }`}
                   >
                     {getFloorName(f)}
                   </button>
@@ -418,65 +468,109 @@ function GuestMapContent() {
         )}
       </div>
 
-      {/* STATUS MESSAGES */}
-      {(mapError || noRoute) && (
-        <div className="absolute left-4 right-4 bottom-[200px] z-10 flex flex-col gap-2 pointer-events-none">
-          {mapError && <div className="bg-red-950/90 border border-red-800 text-red-200 text-sm px-4 py-3 rounded-xl break-all">{mapError}</div>}
-          {noRoute && <div className="bg-amber-950/90 border border-amber-800 text-amber-200 text-sm px-4 py-3 rounded-xl">No connected route between these two places.</div>}
-        </div>
-      )}
+      {/* Floating Bottom Drawer Card (Mobility App Style) */}
+      <div className="absolute bottom-6 left-3 right-3 z-20 pointer-events-auto">
+        <div className="bg-zinc-900/90 backdrop-blur-3xl border border-white/10 rounded-[32px] p-5 shadow-[0_20px_50px_rgba(0,0,0,0.8)]">
+          
+          {/* Subtle Drag Indicator */}
+          <div className="w-10 h-1 bg-zinc-700/60 rounded-full mx-auto mb-4" />
 
-      {/* BOTTOM NAVIGATION CONTROLS */}
-      <div className="absolute bottom-8 left-4 right-4 z-10 flex flex-col gap-3 pointer-events-auto">
-        <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 p-2 rounded-3xl shadow-2xl flex flex-col gap-2">
-          <button onClick={() => setShowStartSelector(true)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-4 rounded-2xl font-semibold flex items-center justify-between px-5 transition">
-            <span className="flex items-center gap-2 text-slate-400"><Navigation className="w-5 h-5 text-blue-400" /> Start</span>
-            <span className="text-white truncate max-w-[200px]">{startNode ? venue.nodes.find((n: any) => n.id === startNode)?.label || "Selected" : "Tap to set start"}</span>
-          </button>
+          {/* Route Status Summary */}
+          <div className="flex items-center justify-between mb-4 px-1">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+                <Sparkles className="w-3 h-3" /> Auto-Guided
+              </span>
+            </div>
+            <span className="text-[11px] font-medium text-zinc-400">
+              {getFloorName(currentFloor)}
+            </span>
+          </div>
 
-          <button onClick={() => setShowDestSelector(true)} className="w-full bg-emerald-500 hover:bg-emerald-400 text-white py-4 rounded-2xl font-bold flex items-center justify-between px-5 transition shadow-lg shadow-emerald-500/20 text-lg">
-            <span className="flex items-center gap-2"><MapPin className="w-6 h-6" /> Dest</span>
-            <span className="truncate max-w-[180px]">{destNode ? venue.nodes.find((n: any) => n.id === destNode)?.label || "Selected" : "Tap to route"}</span>
-          </button>
+          {/* Routing Touchpoints */}
+          <div className="grid grid-cols-2 gap-2.5">
+            <button
+              onClick={() => setShowStartSelector(true)}
+              className="bg-zinc-800/60 hover:bg-zinc-800 border border-white/5 rounded-2xl p-3 text-left transition active:scale-[0.98]"
+            >
+              <div className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 mb-1 flex items-center gap-1">
+                <Navigation className="w-3 h-3 text-sky-400" /> Start
+              </div>
+              <div className="text-xs font-semibold text-zinc-200 truncate">
+                {startNodeObj?.label || "Set origin"}
+              </div>
+            </button>
+
+            <button
+              onClick={() => setShowDestSelector(true)}
+              className="bg-zinc-800/60 hover:bg-zinc-800 border border-white/5 rounded-2xl p-3 text-left transition active:scale-[0.98]"
+            >
+              <div className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 mb-1 flex items-center gap-1">
+                <MapPin className="w-3 h-3 text-emerald-400" /> Target
+              </div>
+              <div className="text-xs font-semibold text-zinc-200 truncate">
+                {destNodeObj?.label || "Choose destination"}
+              </div>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* FULL SCREEN SELECTOR MODALS */}
+      {/* Selection Modal (Clean Dark Sheet) */}
       {(showDestSelector || showStartSelector) && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-slate-950/80 backdrop-blur-md pointer-events-auto transition-all">
-          <div className="bg-slate-900 border-t border-slate-800 rounded-t-[2rem] p-6 w-full h-[85vh] flex flex-col shadow-2xl">
-            <div className="flex justify-between items-center mb-6 px-2">
-              <h2 className="text-2xl font-bold text-white">{showStartSelector ? "Select Start" : "Select Destination"}</h2>
-              <button onClick={() => { setShowDestSelector(false); setShowStartSelector(false); }} className="p-3 bg-slate-800 rounded-full text-slate-400 hover:text-white transition">
-                <X className="w-6 h-6" />
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-md transition-opacity">
+          <div className="bg-[#121215] border-t border-white/10 rounded-t-[36px] p-6 h-[80vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-lg font-bold tracking-tight text-zinc-100">
+                {showStartSelector ? "Select Point of Origin" : "Select Target Destination"}
+              </h2>
+              <button
+                onClick={() => { setShowDestSelector(false); setShowStartSelector(false); }}
+                className="w-9 h-9 rounded-full bg-zinc-800/80 flex items-center justify-center text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="overflow-y-auto flex-1 flex flex-col gap-3 pb-8">
+            <div className="overflow-y-auto flex-1 flex flex-col gap-2 pb-6">
               {venue.nodes.filter((n: any) => n.label).map((node: any) => (
                 <button
                   key={node.id}
                   onClick={() => {
-                    if (showStartSelector) { setStartNode(node.id); setShowStartSelector(false); setCurrentFloor(floorOf(node)); }
-                    else { setDestNode(node.id); setCurrentFloor(floorOf(node)); setShowDestSelector(false); }
+                    if (showStartSelector) {
+                      setStartNode(node.id);
+                      setShowStartSelector(false);
+                      setCurrentFloor(floorOf(node));
+                    } else {
+                      setDestNode(node.id);
+                      setCurrentFloor(floorOf(node));
+                      setShowDestSelector(false);
+                    }
                   }}
-                  className="w-full text-left p-5 bg-slate-800/50 hover:bg-slate-700 border border-slate-700/50 rounded-2xl text-white font-semibold flex justify-between items-center transition"
+                  className="p-4 bg-zinc-900/60 hover:bg-zinc-800/60 border border-white/5 rounded-2xl flex items-center justify-between text-left transition active:scale-[0.99]"
                 >
-                  <span className="text-lg">{node.label}</span>
-                  <span className="text-xs font-bold text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg">{getFloorName(floorOf(node))}</span>
+                  <span className="text-sm font-medium text-zinc-200">{node.label}</span>
+                  <span className="text-[11px] font-semibold text-zinc-400 bg-zinc-800 px-2.5 py-1 rounded-lg">
+                    {getFloorName(floorOf(node))}
+                  </span>
                 </button>
               ))}
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }
 
 export default function GuestMap() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-500" /></div>}>
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#09090b] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+      </div>
+    }>
       <GuestMapContent />
     </Suspense>
   );
